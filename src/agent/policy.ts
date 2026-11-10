@@ -10,9 +10,7 @@ export const MAX_RESULT_CHARS = 20_000;
 const PROTECTED_BRANCHES = new Set(['main', 'master']);
 
 export type PolicyDecision =
-  | { kind: 'run' }
-  | { kind: 'approve'; summary: string }
-  | { kind: 'refuse'; reason: string };
+  { kind: 'run' } | { kind: 'approve'; summary: string } | { kind: 'refuse'; reason: string };
 
 /**
  * Decides what happens to one tool call. These rules are enforced here, in code,
