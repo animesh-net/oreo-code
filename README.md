@@ -6,12 +6,12 @@ All coding work runs on the Mac, inside this extension. The oreo-ai server on th
 
 ## Status
 
-| Milestone | What it adds | State |
-| --- | --- | --- |
-| M3 | Sidebar chat through the oreo-ai model gateway, sign-in, CI, VSIX releases | This release |
-| M4 | Local `github-mcp-server` (stdio), tool catalog, policy rules | Next |
-| M5 | Agent loop, approval cards, local session history | Planned |
-| M6 | Local workspace tools (unsaved files, diff-view edits, build/test) | Planned |
+| Milestone | What it adds                                                               | State        |
+| --------- | -------------------------------------------------------------------------- | ------------ |
+| M3        | Sidebar chat through the oreo-ai model gateway, sign-in, CI, VSIX releases | This release |
+| M4        | Local `github-mcp-server` (stdio), tool catalog, policy rules              | Next         |
+| M5        | Agent loop, approval cards, local session history                          | Planned      |
+| M6        | Local workspace tools (unsaved files, diff-view edits, build/test)         | Planned      |
 
 oreo-ai offers four models: two on Cloudflare Workers AI and two on the MacBook's Ollama. The list is fixed in oreo-ai's config; the extension only offers a dropdown to switch between them. It groups them by where they run, greys out the MacBook models while the MacBook is unreachable, and remembers your last pick.
 
@@ -38,16 +38,16 @@ You need to be on Tailscale to reach the oreo-ai server.
 
 ## Settings
 
-| Setting | Default | Purpose |
-| --- | --- | --- |
+| Setting          | Default                     | Purpose                         |
+| ---------------- | --------------------------- | ------------------------------- |
 | `oreo.serverUrl` | `https://ai.animesh.org.in` | Base URL of your oreo-ai server |
 
 ## Commands
 
-| Command | What it does |
-| --- | --- |
-| `Oreo: Sign in` | Stores an oreo-ai API token and loads your models |
-| `Oreo: Sign out` | Removes the stored token |
+| Command          | What it does                                            |
+| ---------------- | ------------------------------------------------------- |
+| `Oreo: Sign in`  | Stores an oreo-ai API token and loads your models       |
+| `Oreo: Sign out` | Removes the stored token                                |
 | `Oreo: New chat` | Clears the conversation (also the + button on the view) |
 
 ## Develop
@@ -59,6 +59,8 @@ npm ci
 npm run check     # typecheck, unit tests, build
 npm run watch     # rebuild on change
 ```
+
+`npm ci` also installs the git hooks: before each commit Prettier formats the staged files and the README links are checked, and commit messages with AI attribution trailers are refused. `npm run format` formats everything.
 
 Press **F5** in VS Code to start an Extension Development Host with the extension loaded. `npm run package` builds a production VSIX in the repo root.
 

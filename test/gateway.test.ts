@@ -10,9 +10,13 @@ function jsonResponse(status: number, body: unknown): Response {
 }
 
 function sseResponse(chunks: string[]): Response {
-  const body = chunks
-    .map((text) => `data: ${JSON.stringify({ id: 'c1', object: 'chat.completion.chunk', created: 0, model: 'm', choices: [{ index: 0, delta: { content: text }, finish_reason: null }] })}\n\n`)
-    .join('') + 'data: [DONE]\n\n';
+  const body =
+    chunks
+      .map(
+        (text) =>
+          `data: ${JSON.stringify({ id: 'c1', object: 'chat.completion.chunk', created: 0, model: 'm', choices: [{ index: 0, delta: { content: text }, finish_reason: null }] })}\n\n`,
+      )
+      .join('') + 'data: [DONE]\n\n';
   return new Response(body, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
 }
 
@@ -58,6 +62,21 @@ describe('OreoGateway', () => {
     expect(seen?.headers.get('authorization')).toBe('Bearer oreo_t');
   });
 
+  it('reads OpenAI-style error bodies from oreo-ai', async () => {
+    const gateway = new OreoGateway(server, 'oreo_t', async () =>
+      jsonResponse(401, { error: { message: 'Missing, invalid, expired or revoked oreo-ai API token.' } }),
+    );
+    await expect(gateway.listModels()).rejects.toMatchObject({
+      status: 401,
+      serverMessage: 'Missing, invalid, expired or revoked oreo-ai API token.',
+    });
+  });
+
+  it('passes on the offline message for a sleeping MacBook', () => {
+    expect(describeGatewayError(new GatewayHttpError(503, 'wake the MacBook'), server)).toBe('wake the MacBook');
+    expect(describeGatewayError(new GatewayHttpError(503), server)).toMatch(/offline/);
+  });
+
   it('raises GatewayHttpError with the server message', async () => {
     const gateway = new OreoGateway(server, 'oreo_t', async () => jsonResponse(401, { message: 'bad token' }));
     await expect(gateway.listModels()).rejects.toMatchObject({ status: 401, serverMessage: 'bad token' });
@@ -87,7 +106,7 @@ describe('describeGatewayError', () => {
     expect(describeGatewayError(new GatewayHttpError(429), server)).toMatch(/limit/);
     expect(describeGatewayError(new GatewayHttpError(429, 'Daily cap hit'), server)).toBe('Daily cap hit');
     expect(describeGatewayError(new GatewayHttpError(404), server)).toMatch(/no model gateway/);
-    expect(describeGatewayError(new GatewayHttpError(503), server)).toMatch(/503/);
+    expect(describeGatewayError(new GatewayHttpError(502), server)).toMatch(/502/);
   });
 
   it('reads the status from OpenAI SDK errors', () => {
