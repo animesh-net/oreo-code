@@ -85,7 +85,7 @@
   },
   "dependencies": {
     "openai": "^7.55.0",
-    "preact": "^10.27.0"
+    "preact": "^11.2.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
