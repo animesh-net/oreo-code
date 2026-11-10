@@ -19,12 +19,15 @@ Chat uses the oreo-ai model gateway (`GET /api/models` and `POST /api/llm/v1/cha
 
 ## Install
 
-Releases are private VSIX files attached to GitHub Releases. In PowerShell:
+Every build of `main` is published as a prerelease named `main-<run>` with its VSIX attached; the 10 newest are kept. Version tags (`v0.1.0`) are full releases. To install the newest main build, in PowerShell:
 
 ```powershell
-gh release download --repo animesh-net/oreo-code --pattern '*.vsix' --dir ~/Downloads
-code --install-extension (Get-ChildItem ~/Downloads/oreo-code-*.vsix | Sort-Object LastWriteTime | Select-Object -Last 1).FullName
+$tag = gh release list --repo animesh-net/oreo-code --limit 20 --json tagName,isPrerelease --jq '[.[] | select(.isPrerelease)][0].tagName'
+gh release download $tag --repo animesh-net/oreo-code --pattern '*.vsix' --dir ~/Downloads --clobber
+code --install-extension (Get-ChildItem ~/Downloads/oreo-code-*.vsix | Sort-Object LastWriteTime | Select-Object -Last 1).FullName --force
 ```
+
+For the latest version-tagged release instead, drop the first line and `$tag`. `--force` replaces the installed build even when the version number is the same.
 
 ## Use
 
