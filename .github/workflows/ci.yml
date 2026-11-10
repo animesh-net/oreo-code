@@ -21,7 +21,7 @@ env:
 
 # Stage 1 runs everything quick: the PR title, AI trailers, Prettier, the README links
 # and the PR description cleaner. Stage 2 typechecks, tests, builds and packages the
-# extension, and keeps the VSIX for a week.
+# extension, and keeps the VSIX for a week. On main, stage 3 publishes it as a prerelease.
 jobs:
   lint:
     name: Pre-commit Checks
@@ -140,3 +140,45 @@ jobs:
           name: oreo-code-vsix
           path: '*.vsix'
           retention-days: 7
+
+  # Every build of main becomes a prerelease (main-<run>) with its VSIX attached, so
+  # the latest extension is always one `gh release download` away. Only the 10
+  # newest are kept. Version tags (v*) still make full releases in release.yml.
+  publish:
+    name: Publish main build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: oreo-code-vsix
+
+      - name: Create the prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN: ${{ github.run_number }}
+        run: |
+          vsix=$(ls *.vsix)
+          version=$(unzip -p "$vsix" extension/package.json | jq -r .version)
+          name="oreo-code-$version-main.$RUN.vsix"
+          mv "$vsix" "$name"
+          gh release create "main-$RUN" "$name" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --prerelease \
+            --title "oreo-code $version (main #$RUN)" \
+            --notes "Built from $GITHUB_SHA on main. Install: code --install-extension $name --force"
+
+      - name: Keep the 10 newest main builds
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release list --repo "$GITHUB_REPOSITORY" --limit 200 --json tagName,isPrerelease \
+            --jq '[.[] | select(.isPrerelease and (.tagName | startswith("main-")))] | .[10:] | .[].tagName' |
+            while read -r tag; do
+              gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag
+            done

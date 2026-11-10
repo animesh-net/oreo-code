@@ -109,20 +109,20 @@ inside this extension; the oreo-ai server on the Pi only proxies model calls
 usage. The plan: sidebar chat (now), then a local `github-mcp-server` over stdio,
 an agent loop with approval cards, and local workspace tools.
 
-| Path                     | What it is                                                                   |
-| ------------------------ | ---------------------------------------------------------------------------- |
-| `src/extension.ts`       | `activate()`: commands, sidebar view, status bar                             |
-| `src/auth/`              | Secrets in VS Code SecretStorage (the macOS Keychain)                        |
-| `src/gateway/`           | oreo-ai's model gateway (OpenAI-compatible), model list and error wording    |
-| `src/chat/`              | Chat state and turns; no `vscode` imports, unit tested                       |
-| `src/views/`             | Webview host, CSP, message relay                                             |
-| `src/mcp/`               | Pinned `github-mcp-server` download, MCP host and stdio client               |
-| `src/agent/`             | Tool catalog (namespacing, read/write, allowlist) and the write policy       |
-| `src/shared/protocol.ts` | Messages between the extension and the webview; both bundles compile with it |
-| `webview-ui/`            | Preact chat UI, bundled to `dist/webview.js`                                 |
-| `test/`                  | Vitest unit tests                                                            |
-| `scripts/`               | README link check and the PR description cleaner (shared with oreo-ai)       |
-| `.github/workflows/`     | CI, VSIX release on a `v*` tag, PR description cleaner, Dependabot merge     |
+| Path                     | What it is                                                                                             |
+| ------------------------ | ------------------------------------------------------------------------------------------------------ |
+| `src/extension.ts`       | `activate()`: commands, sidebar view, status bar                                                       |
+| `src/auth/`              | Secrets in VS Code SecretStorage (the macOS Keychain)                                                  |
+| `src/gateway/`           | oreo-ai's model gateway (OpenAI-compatible), model list and error wording                              |
+| `src/chat/`              | Chat state and turns; no `vscode` imports, unit tested                                                 |
+| `src/views/`             | Webview host, CSP, message relay                                                                       |
+| `src/mcp/`               | Pinned `github-mcp-server` download, MCP host and stdio client                                         |
+| `src/agent/`             | Tool catalog (namespacing, read/write, allowlist) and the write policy                                 |
+| `src/shared/protocol.ts` | Messages between the extension and the webview; both bundles compile with it                           |
+| `webview-ui/`            | Preact chat UI, bundled to `dist/webview.js`                                                           |
+| `test/`                  | Vitest unit tests                                                                                      |
+| `scripts/`               | README link check and the PR description cleaner (shared with oreo-ai)                                 |
+| `.github/workflows/`     | CI (a prerelease per main build), VSIX release on a `v*` tag, PR description cleaner, Dependabot merge |
 
 ## Rules for the code
 
