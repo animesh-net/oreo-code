@@ -109,17 +109,17 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",
     "openai": "^7.55.0",
-    "preact": "^10.27.0"
+    "preact": "^11.2.0"
   },
   "devDependencies": {
-    "@types/node": "^22.0.0",
+    "@types/node": "^26.6.6",
     "@types/vscode": "~1.100.0",
     "@vscode/vsce": "^4.1.0",
     "esbuild": "^0.28.2",
     "husky": "^9.1.0",
     "lint-staged": "^17.6.0",
-    "prettier": "3.8.4",
-    "typescript": "^5.9.0",
+    "prettier": "3.9.10",
+    "typescript": "^7.0.2",
     "vitest": "^5.1.0"
   },
   "lint-staged": {
