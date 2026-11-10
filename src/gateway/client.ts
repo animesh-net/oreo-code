@@ -88,6 +88,9 @@ async function readMessage(res: Response): Promise<string | undefined> {
     const body = (await res.json()) as { message?: unknown; error?: unknown };
     if (typeof body.message === 'string') return body.message;
     if (typeof body.error === 'string') return body.error;
+    // oreo-ai answers in the OpenAI shape: { "error": { "message": "..." } }.
+    const nested = (body.error as { message?: unknown } | null | undefined)?.message;
+    if (typeof nested === 'string') return nested;
   } catch {
     // Not JSON; fall back to the status code.
   }

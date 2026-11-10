@@ -5,6 +5,9 @@ export function describeGatewayError(err: unknown, serverUrl: string): string {
   if (err instanceof APIUserAbortError) return 'Stopped.';
   if (err instanceof APIConnectionError) return unreachable(serverUrl);
   const status = statusOf(err);
+  if (status === 503) {
+    return serverMessage(err) ?? 'That model is offline right now. Pick another one or try again later.';
+  }
   if (status === 401 || status === 403) {
     return 'oreo-ai rejected your API token. Run "Oreo: Sign in" with a new token.';
   }
