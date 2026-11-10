@@ -11,10 +11,15 @@ const models: ModelInfo[] = [
   { id: 'oreo-2b', name: 'Oreo 2B', provider: 'macbook', supportsTools: false, available: false },
 ];
 
+const efforts: string[] = [];
+
 function fakeGateway(stream: (messages: ChatMessage[], signal: AbortSignal) => AsyncIterable<string>): Gateway {
   return {
     listModels: async () => models,
-    streamChat: (_model, messages, signal) => stream(messages, signal),
+    streamChat: (_model, messages, signal, effort) => {
+      efforts.push(effort);
+      return stream(messages, signal);
+    },
   };
 }
 
@@ -24,6 +29,8 @@ function setup(gateway: Gateway, token: string | null = 'oreo_t', overrides: Par
     getServerUrl: () => 'https://oreo.test/',
     getLastModel: () => undefined,
     rememberModel: () => {},
+    getEffort: () => undefined,
+    rememberEffort: () => {},
     getToken: async () => token ?? undefined,
     createGateway: () => gateway,
     post: (m) => posted.push(m),
@@ -159,6 +166,47 @@ describe('ChatController', () => {
     await controller.refresh();
     expect(controller.state).toMatchObject({ signedIn: false });
     expect(controller.state.error).toMatch(/https:\/\//);
+  });
+});
+
+describe('thinking effort', () => {
+  it('defaults to medium on Cloudflare and none on the Mac, and goes with each request', async () => {
+    efforts.length = 0;
+    const { controller } = setup(fakeGateway(() => chunks('ok')));
+    await controller.refresh();
+    expect(controller.state.effort).toBe('medium');
+    await controller.handle({ type: 'send', text: 'hi' });
+
+    await controller.handle({ type: 'selectModel', modelId: 'oreo-4b' });
+    expect(controller.state.effort).toBe('none');
+    await controller.handle({ type: 'send', text: 'hi again' });
+
+    expect(efforts).toEqual(['medium', 'none']);
+  });
+
+  it('remembers your pick per provider and ignores unknown values', async () => {
+    const saved = new Map<string, string>();
+    const { controller } = setup(
+      fakeGateway(() => chunks('ok')),
+      'oreo_t',
+      {
+        getEffort: (provider) => saved.get(provider) as never,
+        rememberEffort: (provider, effort) => saved.set(provider, effort),
+      },
+    );
+    await controller.refresh();
+
+    await controller.handle({ type: 'selectEffort', effort: 'high' });
+    expect(controller.state.effort).toBe('high');
+    expect(saved.get('cloudflare')).toBe('high');
+
+    await controller.handle({ type: 'selectModel', modelId: 'oreo-4b' });
+    expect(controller.state.effort).toBe('none');
+    await controller.handle({ type: 'selectEffort', effort: 'low' });
+    expect(saved.get('macbook')).toBe('low');
+
+    await controller.handle({ type: 'selectEffort', effort: 'extreme' as never });
+    expect(controller.state.effort).toBe('low');
   });
 });
 

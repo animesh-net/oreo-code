@@ -33,7 +33,7 @@ For the latest version-tagged release instead, drop the first line and `$tag`. `
 
 1. In oreo-ai, open **Settings → API tokens** and create a token (it starts with `oreo_`).
 2. In VS Code, open the **Oreo** view in the activity bar and choose **Sign in**, or run `Oreo: Sign in`.
-3. Pick a model and chat. **Stop** keeps the partial reply; a failed reply is discarded and your text goes back into the box.
+3. Pick a model and how much it may think, and chat. The **Thinking** dropdown (off, low, medium, high) is sent with every message as `reasoning_effort`; it starts at medium for the Cloudflare models and off for the MacBook models, which are small and slow to think on the M1, and remembers your pick separately for each. oreo-ai passes it on unchanged. **Stop** keeps the partial reply; a failed reply is discarded and your text goes back into the box.
 
 The token is stored in VS Code SecretStorage, which on macOS is the Keychain. It is never written to settings files.
 

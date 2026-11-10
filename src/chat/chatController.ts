@@ -1,7 +1,17 @@
 import type { Gateway } from '../gateway/client';
 import { describeGatewayError } from '../gateway/errors';
 import { normalizeServerUrl } from '../gateway/serverUrl';
-import type { ChatMessage, FromWebview, ModelInfo, ToWebview, ViewState } from '../shared/protocol';
+import {
+  DEFAULT_EFFORT,
+  REASONING_EFFORTS,
+  type ChatMessage,
+  type FromWebview,
+  type ModelInfo,
+  type ModelProvider,
+  type ReasoningEffort,
+  type ToWebview,
+  type ViewState,
+} from '../shared/protocol';
 
 export interface ChatControllerDeps {
   /** Raw "oreo.serverUrl" setting. */
@@ -10,6 +20,10 @@ export interface ChatControllerDeps {
   getLastModel(): string | undefined;
   /** Remembers the dropdown choice for next time. */
   rememberModel(modelId: string): void;
+  /** The thinking effort picked last time for a provider, if any. */
+  getEffort(provider: ModelProvider): ReasoningEffort | undefined;
+  /** Remembers the thinking effort picked for a provider. */
+  rememberEffort(provider: ModelProvider, effort: ReasoningEffort): void;
   getToken(): Promise<string | undefined>;
   createGateway(serverUrl: string, token: string): Gateway;
   /** Sends a message to the webview (a no-op while the view is closed). */
@@ -94,6 +108,14 @@ export class ChatController {
           this.publish();
         }
         return;
+      case 'selectEffort': {
+        const provider = this.selectedProvider;
+        if (provider && REASONING_EFFORTS.includes(message.effort)) {
+          this.deps.rememberEffort(provider, message.effort);
+          this.publish();
+        }
+        return;
+      }
       case 'signIn':
         await this.deps.signIn();
         return;
@@ -119,10 +141,21 @@ export class ChatController {
       serverUrl: this.serverUrl,
       models: this.models,
       selectedModel: this.selectedModel,
+      effort: this.effort,
       messages: [...this.messages],
       busy: this.busy,
       error: this.error,
     };
+  }
+
+  private get selectedProvider(): ModelProvider | undefined {
+    return this.models.find((m) => m.id === this.selectedModel)?.provider;
+  }
+
+  /** Your pick for the selected model's provider, or its default. */
+  private get effort(): ReasoningEffort {
+    const provider = this.selectedProvider ?? 'cloudflare';
+    return this.deps.getEffort(provider) ?? DEFAULT_EFFORT[provider];
   }
 
   private async send(rawText: string): Promise<void> {
@@ -142,7 +175,7 @@ export class ChatController {
 
     let reply = '';
     try {
-      for await (const delta of gateway.streamChat(model, history, abort.signal)) {
+      for await (const delta of gateway.streamChat(model, history, abort.signal, this.effort)) {
         reply += delta;
         this.deps.post({ type: 'delta', text: delta });
       }

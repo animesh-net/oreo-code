@@ -7,10 +7,11 @@ import { ensureGithubMcpBinary, GITHUB_MCP_VERSION } from './mcp/githubBinary';
 import { githubServerSpec } from './mcp/githubServer';
 import { McpHost } from './mcp/host';
 import { stdioConnect } from './mcp/stdioConnect';
-import type { ViewState } from './shared/protocol';
+import type { ReasoningEffort, ViewState } from './shared/protocol';
 import { ChatViewProvider } from './views/chatViewProvider';
 
 const LAST_MODEL_KEY = 'oreo.lastModel';
+const EFFORT_KEY = 'oreo.effort';
 
 let mcpHost: McpHost | undefined;
 
@@ -41,6 +42,8 @@ export function activate(context: vscode.ExtensionContext): void {
     getServerUrl: () => config().get<string>('serverUrl', ''),
     getLastModel: () => context.globalState.get<string>(LAST_MODEL_KEY),
     rememberModel: (modelId) => void context.globalState.update(LAST_MODEL_KEY, modelId),
+    getEffort: (provider) => context.globalState.get<ReasoningEffort>(`${EFFORT_KEY}.${provider}`),
+    rememberEffort: (provider, effort) => void context.globalState.update(`${EFFORT_KEY}.${provider}`, effort),
     getToken: () => tokens.get(),
     createGateway: (serverUrl, token) => new OreoGateway(serverUrl, token),
     post: (message) => view.post(message),

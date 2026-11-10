@@ -84,19 +84,24 @@ describe('OreoGateway', () => {
 
   it('streams chat deltas from the OpenAI-compatible endpoint', async () => {
     let url = '';
-    let body: { model?: string; stream?: boolean } = {};
+    let body: { model?: string; stream?: boolean; reasoning_effort?: string } = {};
     const gateway = new OreoGateway(server, 'oreo_t', async (input, init) => {
       url = String(input);
       body = JSON.parse(String(init?.body));
       return sseResponse(['Hel', 'lo']);
     });
     const parts: string[] = [];
-    for await (const p of gateway.streamChat('m1', [{ role: 'user', content: 'hi' }], new AbortController().signal)) {
+    for await (const p of gateway.streamChat(
+      'm1',
+      [{ role: 'user', content: 'hi' }],
+      new AbortController().signal,
+      'medium',
+    )) {
       parts.push(p);
     }
     expect(parts.join('')).toBe('Hello');
     expect(url).toBe(`${server}/api/llm/v1/chat/completions`);
-    expect(body).toMatchObject({ model: 'm1', stream: true });
+    expect(body).toMatchObject({ model: 'm1', stream: true, reasoning_effort: 'medium' });
   });
 });
 
