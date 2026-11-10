@@ -116,6 +116,8 @@ an agent loop with approval cards, and local workspace tools.
 | `src/gateway/`           | oreo-ai's model gateway (OpenAI-compatible), model list and error wording    |
 | `src/chat/`              | Chat state and turns; no `vscode` imports, unit tested                       |
 | `src/views/`             | Webview host, CSP, message relay                                             |
+| `src/mcp/`               | Pinned `github-mcp-server` download, MCP host and stdio client               |
+| `src/agent/`             | Tool catalog (namespacing, read/write, allowlist) and the write policy       |
 | `src/shared/protocol.ts` | Messages between the extension and the webview; both bundles compile with it |
 | `webview-ui/`            | Preact chat UI, bundled to `dist/webview.js`                                 |
 | `test/`                  | Vitest unit tests                                                            |
@@ -134,8 +136,16 @@ an agent loop with approval cards, and local workspace tools.
 - **No model ids and no model editing.** The four models are fixed in oreo-ai's
   config and come from `GET /api/models`. The extension only offers a dropdown;
   agent mode uses only models with `supportsTools: true`.
-- **Testable core.** `src/chat/` and `src/gateway/` have no `vscode` imports; VS
+- **Testable core.** `src/chat/`, `src/gateway/`, `src/mcp/` and `src/agent/` have no `vscode` imports; VS
   Code wiring goes in `src/extension.ts`, `src/views/` and `src/auth/`.
+- **Agent safety lives in code.** Only the write tools in `ALLOWED_WRITES`
+  (`src/agent/catalog.ts`) are offered; a tool without `readOnlyHint: true` is a
+  write. `src/agent/policy.ts` refuses writes outside `oreo-agent/` branches and
+  pull requests not into `main`, and every write needs approval. Never relax these
+  through the prompt.
+- **Pinned MCP server.** `GITHUB_MCP_VERSION` changes only in a PR; the download
+  must match the release's SHA-256. The child gets a minimal environment plus the
+  token and `GITHUB_TOOLSETS`, never the whole VS Code environment.
 - **Errors in one sentence.** Gateway failures are worded in
   `src/gateway/errors.ts`; oreo-ai answers in the OpenAI `{"error":{"message"}}`
   shape.
@@ -167,4 +177,5 @@ tests and packages the VSIX. The review commands in `.claude/commands/`
 | `external: ['vscode']` in `esbuild.mjs`                   | `vscode` exists only at runtime; bundling it fails |
 | `retainContextWhenHidden` on the chat view                | Hiding the sidebar would drop a streaming reply    |
 | The `oreo.apiToken` SecretStorage key                     | Everyone would be signed out after an update       |
+| The `oreo.githubToken` SecretStorage key                  | The GitHub token would have to be entered again    |
 | `acquireVsCodeApi()` called once (`webview-ui/vscode.ts`) | A second call throws and the webview goes blank    |

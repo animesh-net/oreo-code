@@ -53,6 +53,21 @@
         "title": "New chat",
         "category": "Oreo",
         "icon": "$(add)"
+      },
+      {
+        "command": "oreo.setGithubToken",
+        "title": "Set GitHub token",
+        "category": "Oreo"
+      },
+      {
+        "command": "oreo.clearGithubToken",
+        "title": "Clear GitHub token",
+        "category": "Oreo"
+      },
+      {
+        "command": "oreo.showGithubTools",
+        "title": "Show GitHub tools",
+        "category": "Oreo"
       }
     ],
     "menus": {
@@ -71,6 +86,11 @@
           "type": "string",
           "default": "https://ai.animesh.org.in",
           "description": "Base URL of your oreo-ai server. Reached over Tailscale."
+        },
+        "oreo.githubMcp.path": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Path to your own `github-mcp-server` binary. Leave empty to download the pinned release into the extension's storage, checked against its SHA-256."
         }
       }
     }
@@ -87,6 +107,7 @@
     "prepare": "husky"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "openai": "^7.55.0",
     "preact": "^10.27.0"
   },
