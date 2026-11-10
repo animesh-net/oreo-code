@@ -45,10 +45,7 @@ export class OreoGateway implements Gateway {
   }
 
   async *streamChat(model: string, messages: ChatMessage[], signal: AbortSignal): AsyncIterable<string> {
-    const stream = await this.openai.chat.completions.create(
-      { model, messages, stream: true },
-      { signal },
-    );
+    const stream = await this.openai.chat.completions.create({ model, messages, stream: true }, { signal });
     for await (const chunk of stream) {
       const text = chunk.choices[0]?.delta?.content;
       if (text) yield text;

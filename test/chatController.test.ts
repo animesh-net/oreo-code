@@ -39,13 +39,20 @@ async function* chunks(...parts: string[]) {
 
 describe('ChatController', () => {
   it('shows signed out without a token', async () => {
-    const { controller } = setup(fakeGateway(() => chunks()), null);
+    const { controller } = setup(
+      fakeGateway(() => chunks()),
+      null,
+    );
     await controller.refresh();
     expect(controller.state).toMatchObject({ signedIn: false, serverUrl: 'https://oreo.test' });
   });
 
   it('loads models and preselects the last dropdown choice', async () => {
-    const { controller } = setup(fakeGateway(() => chunks()), 'oreo_t', { getLastModel: () => 'qwen3' });
+    const { controller } = setup(
+      fakeGateway(() => chunks()),
+      'oreo_t',
+      { getLastModel: () => 'qwen3' },
+    );
     await controller.refresh();
     expect(controller.state).toMatchObject({ signedIn: true, selectedModel: 'qwen3' });
     expect(controller.state.models).toHaveLength(4);
@@ -117,7 +124,11 @@ describe('ChatController', () => {
 
   it('refuses to select an unavailable model and remembers valid picks', async () => {
     const remembered: string[] = [];
-    const { controller } = setup(fakeGateway(() => chunks()), 'oreo_t', { rememberModel: (id) => remembered.push(id) });
+    const { controller } = setup(
+      fakeGateway(() => chunks()),
+      'oreo_t',
+      { rememberModel: (id) => remembered.push(id) },
+    );
     await controller.refresh();
     await controller.handle({ type: 'selectModel', modelId: 'oreo-2b' });
     expect(controller.state.selectedModel).toBe('gpt-oss-120b');
@@ -140,7 +151,11 @@ describe('ChatController', () => {
   });
 
   it('reports a bad server URL without calling the gateway', async () => {
-    const { controller } = setup(fakeGateway(() => chunks()), 'oreo_t', { getServerUrl: () => 'ftp://x' });
+    const { controller } = setup(
+      fakeGateway(() => chunks()),
+      'oreo_t',
+      { getServerUrl: () => 'ftp://x' },
+    );
     await controller.refresh();
     expect(controller.state).toMatchObject({ signedIn: false });
     expect(controller.state.error).toMatch(/https:\/\//);

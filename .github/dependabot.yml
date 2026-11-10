@@ -1,13 +1,27 @@
+# Weekly pull requests for the extension's npm packages and the GitHub Actions in
+# .github/workflows. Approving one merges it (dependabot-merge.yml).
 version: 2
 updates:
-  - package-ecosystem: npm
-    directory: /
-    schedule:
-      interval: weekly
-    groups:
-      dev-dependencies:
-        dependency-type: development
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    assignees:
+      - animesh-net
+    groups:
+      actions:
+        patterns: ['*']
+
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    assignees:
+      - animesh-net
+    # @types/vscode must not be newer than engines.vscode in package.json, or
+    # packaging fails; raise both together by hand.
+    ignore:
+      - dependency-name: '@types/vscode'
+    groups:
+      npm:
+        patterns: ['*']

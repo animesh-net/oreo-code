@@ -177,7 +177,11 @@ export class ChatController {
  * else the first available model (oreo-ai lists its default first).
  * Unavailable models (MacBook asleep) are skipped.
  */
-export function pickModel(models: ModelInfo[], current: string | undefined, preferred: string | undefined): string | undefined {
+export function pickModel(
+  models: ModelInfo[],
+  current: string | undefined,
+  preferred: string | undefined,
+): string | undefined {
   const usable = models.filter((m) => m.available);
   if (current && usable.some((m) => m.id === current)) return current;
   if (preferred && usable.some((m) => m.id === preferred)) return preferred;

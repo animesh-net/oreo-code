@@ -1,0 +1,6 @@
+if grep -qiE '^(co-authored-by|co-committed-by):.*(claude|anthropic|copilot|openai|gpt|chatgpt|gemini)' "$1"; then
+  echo "✖ Commit message contains an AI attribution trailer (Co-Authored-By/Co-Committed-By naming an AI agent)."
+  echo "  CLAUDE.md: every commit must be authored and attributed entirely to a human."
+  echo "  Remove the trailer and re-commit."
+  exit 1
+fi

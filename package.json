@@ -81,7 +81,10 @@
     "typecheck": "tsc --noEmit -p . && tsc --noEmit -p webview-ui",
     "test": "vitest run",
     "check": "npm run typecheck && npm test && npm run build",
-    "package": "node esbuild.mjs --production && vsce package --no-dependencies"
+    "package": "node esbuild.mjs --production && vsce package --no-dependencies",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "prepare": "husky"
   },
   "dependencies": {
     "openai": "^7.55.0",
@@ -92,7 +95,15 @@
     "@types/vscode": "~1.100.0",
     "@vscode/vsce": "^4.1.0",
     "esbuild": "^0.28.2",
+    "husky": "^9.1.0",
+    "lint-staged": "^17.6.0",
+    "prettier": "3.8.4",
     "typescript": "^5.9.0",
     "vitest": "^5.1.0"
+  },
+  "lint-staged": {
+    "*.{ts,tsx,mjs,mts,json,md,yaml,yml,css}": [
+      "prettier --write"
+    ]
   }
 }

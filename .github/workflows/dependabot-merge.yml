@@ -1,0 +1,50 @@
+name: Dependabot merge
+
+# When the owner approves a Dependabot pull request, wait for its other checks and then
+# squash-merge it with only its title as the commit message. A merge from GitHub's button
+# adds "Co-authored-by" and "Signed-off-by" lines for Dependabot; this one adds none.
+on:
+  pull_request_review:
+    types: [submitted]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  merge:
+    if: >-
+      github.event.review.state == 'approved' &&
+      github.event.pull_request.user.login == 'dependabot[bot]' &&
+      github.event.review.user.login == github.repository_owner
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Wait for the other checks
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          # Every check on the commit except this job; stop at the first failure.
+          while true; do
+            runs=$(gh api "repos/$GITHUB_REPOSITORY/commits/$SHA/check-runs?per_page=100" \
+              --jq '[.check_runs[] | select(.name != "merge")]')
+            if echo "$runs" | jq -e 'any(.[]; .conclusion == "failure" or .conclusion == "cancelled")' > /dev/null; then
+              echo "A check failed; not merging."
+              exit 1
+            fi
+            if echo "$runs" | jq -e 'length > 0 and all(.[]; .status == "completed")' > /dev/null; then
+              break
+            fi
+            sleep 20
+          done
+      - name: Squash-merge with a clean message
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          TITLE: ${{ github.event.pull_request.title }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          gh api -X PUT "repos/$GITHUB_REPOSITORY/pulls/$PR/merge" \
+            -f merge_method=squash -f sha="$SHA" \
+            -f commit_title="$TITLE (#$PR)" -f commit_message="" > /dev/null

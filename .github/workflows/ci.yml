@@ -1,43 +1,142 @@
 name: CI
 
 on:
-  pull_request:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
 
+# Read-only token; a newer push to the same pull request cancels the older run.
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  NODE_VERSION: '24'
+  # Keeps Husky from installing git hooks during `npm ci`.
+  HUSKY: '0'
+
+# Stage 1 runs everything quick: the PR title, AI trailers, Prettier, the README links
+# and the PR description cleaner. Stage 2 typechecks, tests, builds and packages the
+# extension, and keeps the VSIX for a week.
 jobs:
-  check:
+  lint:
+    name: Pre-commit Checks
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: ${{ env.NODE_VERSION }}
           cache: npm
-      - run: npm ci
-      - run: npm run check
-      - run: npm run package
-      - uses: actions/upload-artifact@v7
+
+      - name: Validate commit message
+        # Only on pull requests: the PR title becomes the squash-merge commit's subject.
+        if: github.event_name == 'pull_request'
+        env:
+          MSG: ${{ github.event.pull_request.title }}
+        run: |
+          SUBJECT=$(echo "$MSG" | head -1)
+          echo "Subject: $SUBJECT"
+
+          # Length check: must be ≤ 72 characters.
+          if [ ${#SUBJECT} -gt 72 ]; then
+            echo "FAIL: Subject is ${#SUBJECT} chars — must be 72 or fewer."
+            exit 1
+          fi
+
+          # Casing check: first letter must be uppercase.
+          FIRST=$(echo "$SUBJECT" | cut -c1)
+          if ! echo "$FIRST" | grep -qE '^[A-Z]$'; then
+            echo "FAIL: Subject must start with a capital letter."
+            echo "Example: Add model selector dropdown"
+            exit 1
+          fi
+
+          echo "PASS: Commit message format is valid."
+
+      - name: Reject AI co-authorship trailers
+        # CLAUDE.md: every commit must be authored and attributed entirely to a human.
+        # Checks every commit in the PR plus the PR description itself, since a
+        # squash-merge commit message defaults to "PR title" + "PR body" on GitHub.
+        if: github.event_name == 'pull_request'
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          PATTERN='(co-authored-by|co-committed-by):.*(claude|anthropic|copilot|openai|gpt|chatgpt|gemini)'
+          FAIL=0
+
+          git fetch origin "$BASE_SHA" "$HEAD_SHA"
+
+          while IFS= read -r sha; do
+            MSG=$(git log -1 --format=%B "$sha")
+            if echo "$MSG" | grep -qiE "$PATTERN"; then
+              echo "FAIL: commit $sha contains an AI co-authorship trailer:"
+              echo "$MSG" | grep -iE "$PATTERN"
+              FAIL=1
+            fi
+          done < <(git rev-list "$BASE_SHA..$HEAD_SHA")
+
+          if echo "$PR_BODY" | grep -qiE "$PATTERN"; then
+            echo "FAIL: PR description contains an AI co-authorship trailer (a squash-merge would inherit this)."
+            FAIL=1
+          fi
+
+          if [ "$FAIL" -ne 0 ]; then
+            echo ""
+            echo "CLAUDE.md: every commit must be authored and attributed entirely to a human."
+            echo "Remove the trailer from the commit message(s) and/or PR description, then push again."
+            exit 1
+          fi
+
+          echo "PASS: no AI co-authorship trailers found."
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Prettier (repo-wide)
+        run: npx prettier --check .
+
+      - name: README links
+        run: bash scripts/check-doc-links.sh
+
+      - name: PR description cleaner
+        run: bash scripts/test-clean-pr-body.sh
+
+  build:
+    name: Build
+    needs: lint
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Package the VSIX
+        run: npm run package
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: oreo-code-vsix
           path: '*.vsix'
           retention-days: 7
-
-  no-ai-attribution:
-    # CLAUDE.md: every commit is authored by a human, with no AI trailers.
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-      - name: Check commit messages
-        run: |
-          range="${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}"
-          if git log --format=%B "$range" | grep -qiE '^(co-authored-by|co-committed-by):.*(claude|anthropic|copilot|openai|gpt|chatgpt|gemini)'; then
-            echo "A commit in this PR carries an AI attribution trailer."
-            exit 1
-          fi
