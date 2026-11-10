@@ -1,0 +1,98 @@
+{
+  "name": "oreo-code",
+  "displayName": "Oreo Code",
+  "description": "Chat and coding agent for oreo-ai, inside VS Code.",
+  "version": "0.1.0",
+  "publisher": "animesh-net",
+  "private": true,
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/animesh-net/oreo-code.git"
+  },
+  "engines": {
+    "vscode": "^1.100.0"
+  },
+  "categories": [
+    "AI",
+    "Chat"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "oreo",
+          "title": "Oreo",
+          "icon": "media/oreo.svg"
+        }
+      ]
+    },
+    "views": {
+      "oreo": [
+        {
+          "type": "webview",
+          "id": "oreo.chat",
+          "name": "Chat"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "oreo.signIn",
+        "title": "Sign in",
+        "category": "Oreo"
+      },
+      {
+        "command": "oreo.signOut",
+        "title": "Sign out",
+        "category": "Oreo"
+      },
+      {
+        "command": "oreo.newChat",
+        "title": "New chat",
+        "category": "Oreo",
+        "icon": "$(add)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "oreo.newChat",
+          "when": "view == oreo.chat",
+          "group": "navigation"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Oreo",
+      "properties": {
+        "oreo.serverUrl": {
+          "type": "string",
+          "default": "https://ai.animesh.org.in",
+          "description": "Base URL of your oreo-ai server. Reached over Tailscale."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "typecheck": "tsc --noEmit -p . && tsc --noEmit -p webview-ui",
+    "test": "vitest run",
+    "check": "npm run typecheck && npm test && npm run build",
+    "package": "node esbuild.mjs --production && vsce package --no-dependencies"
+  },
+  "dependencies": {
+    "openai": "^7.55.0",
+    "preact": "^10.27.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/vscode": "~1.100.0",
+    "@vscode/vsce": "^4.1.0",
+    "esbuild": "^0.28.2",
+    "typescript": "^5.9.0",
+    "vitest": "^5.1.0"
+  }
+}
