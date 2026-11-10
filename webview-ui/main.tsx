@@ -3,7 +3,6 @@ import { useEffect, useRef, useState } from 'preact/hooks';
 import {
   REASONING_EFFORTS,
   type ChatMessage,
-  type ModelInfo,
   type ReasoningEffort,
   type ToWebview,
   type ViewState,
@@ -19,9 +18,8 @@ const EFFORT_LABELS: Record<ReasoningEffort, string> = {
 };
 
 const emptyState: ViewState = {
-  signedIn: false,
-  serverUrl: '',
-  effort: 'medium',
+  ollamaUrl: '',
+  effort: 'none',
   models: [],
   messages: [],
   busy: false,
@@ -68,18 +66,6 @@ function App() {
     if (el) el.scrollTop = el.scrollHeight;
   }, [state.messages, streaming]);
 
-  if (!state.signedIn) {
-    return (
-      <div class="signin">
-        <h2>Connect to oreo-ai</h2>
-        <p>Create an API token in oreo-ai under Settings → API tokens, then sign in here.</p>
-        {state.serverUrl && <p class="muted">Server: {state.serverUrl}</p>}
-        {state.error && <p class="error">{state.error}</p>}
-        <button onClick={() => vscode.postMessage({ type: 'signIn' })}>Sign in</button>
-      </div>
-    );
-  }
-
   const canSend = !state.busy && !!state.selectedModel && draft.trim().length > 0;
   const send = () => {
     if (!canSend) return;
@@ -97,8 +83,11 @@ function App() {
           onChange={(e) => vscode.postMessage({ type: 'selectModel', modelId: e.currentTarget.value })}
         >
           {state.models.length === 0 && <option value="">No models</option>}
-          <ModelGroup label="Cloudflare" models={state.models.filter((m) => m.provider === 'cloudflare')} />
-          <ModelGroup label="MacBook" models={state.models.filter((m) => m.provider === 'macbook')} />
+          {state.models.map((m) => (
+            <option key={m.id} value={m.id} disabled={!m.available}>
+              {m.available ? m.name : `${m.name} (not in Ollama)`}
+            </option>
+          ))}
         </select>
         <select
           aria-label="Thinking"
@@ -130,7 +119,7 @@ function App() {
       {state.error && (
         <div class="error banner">
           <span>{state.error}</span>
-          {state.models.length === 0 && (
+          {!state.models.some((m) => m.available) && (
             <button class="secondary" onClick={() => vscode.postMessage({ type: 'retry' })}>
               Retry
             </button>
@@ -163,19 +152,6 @@ function App() {
         )}
       </footer>
     </div>
-  );
-}
-
-function ModelGroup({ label, models }: { label: string; models: ModelInfo[] }) {
-  if (models.length === 0) return null;
-  return (
-    <optgroup label={label}>
-      {models.map((m) => (
-        <option key={m.id} value={m.id} disabled={!m.available}>
-          {m.available ? m.name : `${m.name} (unavailable)`}
-        </option>
-      ))}
-    </optgroup>
   );
 }
 

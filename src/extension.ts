@@ -1,22 +1,21 @@
 import * as vscode from 'vscode';
 import { GithubTokenStore, validateGithubTokenShape } from './auth/githubToken';
-import { TokenStore, validateTokenShape } from './auth/tokenStore';
 import { ChatController } from './chat/chatController';
-import { OreoGateway } from './gateway/client';
 import { ensureGithubMcpBinary, GITHUB_MCP_VERSION } from './mcp/githubBinary';
 import { githubServerSpec } from './mcp/githubServer';
 import { McpHost } from './mcp/host';
 import { stdioConnect } from './mcp/stdioConnect';
+import { OllamaClient } from './ollama/client';
 import type { ReasoningEffort, ViewState } from './shared/protocol';
 import { ChatViewProvider } from './views/chatViewProvider';
 
 const LAST_MODEL_KEY = 'oreo.lastModel';
-const EFFORT_KEY = 'oreo.effort';
+// Kept from when effort was remembered per provider, so an earlier pick for the Mac's models carries over.
+const EFFORT_KEY = 'oreo.effort.macbook';
 
 let mcpHost: McpHost | undefined;
 
 export function activate(context: vscode.ExtensionContext): void {
-  const tokens = new TokenStore(context.secrets);
   const view = new ChatViewProvider(context.extensionUri);
   const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
   status.command = 'workbench.view.extension.oreo';
@@ -24,30 +23,14 @@ export function activate(context: vscode.ExtensionContext): void {
 
   const config = () => vscode.workspace.getConfiguration('oreo');
 
-  const signIn = async () => {
-    const token = await vscode.window.showInputBox({
-      title: 'Oreo: Sign in',
-      prompt: 'Paste an API token from oreo-ai → Settings → API tokens.',
-      password: true,
-      ignoreFocusOut: true,
-      validateInput: validateTokenShape,
-    });
-    if (token === undefined) return;
-    await tokens.set(token);
-    // Refresh also runs from tokens.onDidChange; this makes the result immediate.
-    await controller.refresh();
-  };
-
   const controller = new ChatController({
-    getServerUrl: () => config().get<string>('serverUrl', ''),
+    getOllamaUrl: () => config().get<string>('ollamaUrl', ''),
     getLastModel: () => context.globalState.get<string>(LAST_MODEL_KEY),
     rememberModel: (modelId) => void context.globalState.update(LAST_MODEL_KEY, modelId),
-    getEffort: (provider) => context.globalState.get<ReasoningEffort>(`${EFFORT_KEY}.${provider}`),
-    rememberEffort: (provider, effort) => void context.globalState.update(`${EFFORT_KEY}.${provider}`, effort),
-    getToken: () => tokens.get(),
-    createGateway: (serverUrl, token) => new OreoGateway(serverUrl, token),
+    getEffort: () => context.globalState.get<ReasoningEffort>(EFFORT_KEY),
+    rememberEffort: (effort) => void context.globalState.update(EFFORT_KEY, effort),
+    createClient: (ollamaUrl) => new OllamaClient(ollamaUrl),
     post: (message) => view.post(message),
-    signIn,
     onState: (state) => updateStatus(status, state),
   });
   view.attach(controller);
@@ -107,12 +90,6 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.window.registerWebviewViewProvider(ChatViewProvider.viewId, view, {
       webviewOptions: { retainContextWhenHidden: true },
     }),
-    vscode.commands.registerCommand('oreo.signIn', signIn),
-    vscode.commands.registerCommand('oreo.signOut', async () => {
-      await tokens.clear();
-      await controller.refresh();
-      void vscode.window.showInformationMessage('Signed out of oreo-ai.');
-    }),
     vscode.commands.registerCommand('oreo.newChat', () => controller.newChat()),
     output,
     vscode.commands.registerCommand('oreo.setGithubToken', setGithubToken),
@@ -123,9 +100,8 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('oreo.showGithubTools', showGithubTools),
     // A new token or binary takes effect on the next start.
     githubTokens.onDidChange(() => void host.stop()),
-    tokens.onDidChange(() => void controller.refresh()),
     vscode.workspace.onDidChangeConfiguration((e) => {
-      if (e.affectsConfiguration('oreo.serverUrl')) {
+      if (e.affectsConfiguration('oreo.ollamaUrl')) {
         void controller.refresh();
       }
       if (e.affectsConfiguration('oreo.githubMcp.path')) {
@@ -143,11 +119,6 @@ export async function deactivate(): Promise<void> {
 }
 
 function updateStatus(item: vscode.StatusBarItem, state: ViewState): void {
-  if (!state.signedIn) {
-    item.text = '$(account) Oreo: signed out';
-    item.tooltip = 'Run "Oreo: Sign in" to connect to oreo-ai.';
-    return;
-  }
   if (state.error) {
     item.text = '$(warning) Oreo';
     item.tooltip = state.error;
@@ -155,5 +126,5 @@ function updateStatus(item: vscode.StatusBarItem, state: ViewState): void {
   }
   const model = state.models.find((m) => m.id === state.selectedModel);
   item.text = state.busy ? '$(sync~spin) Oreo' : `$(comment-discussion) ${model?.name ?? 'Oreo'}`;
-  item.tooltip = `Connected to ${state.serverUrl}`;
+  item.tooltip = `Ollama at ${state.ollamaUrl}`;
 }

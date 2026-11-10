@@ -1,7 +1,7 @@
 {
   "name": "oreo-code",
   "displayName": "Oreo Code",
-  "description": "Chat and coding agent for oreo-ai, inside VS Code.",
+  "description": "Chat and coding agent on your Mac's Ollama, inside VS Code.",
   "version": "0.1.0",
   "publisher": "animesh-net",
   "private": true,
@@ -39,16 +39,6 @@
     },
     "commands": [
       {
-        "command": "oreo.signIn",
-        "title": "Sign in",
-        "category": "Oreo"
-      },
-      {
-        "command": "oreo.signOut",
-        "title": "Sign out",
-        "category": "Oreo"
-      },
-      {
         "command": "oreo.newChat",
         "title": "New chat",
         "category": "Oreo",
@@ -82,10 +72,10 @@
     "configuration": {
       "title": "Oreo",
       "properties": {
-        "oreo.serverUrl": {
+        "oreo.ollamaUrl": {
           "type": "string",
-          "default": "https://ai.animesh.org.in",
-          "description": "Base URL of your oreo-ai server. Reached over Tailscale."
+          "default": "http://127.0.0.1:11434",
+          "markdownDescription": "Base URL of Ollama, which serves the Oreo models. If Ollama listens only on your Tailscale address, set `http://<tailscale ip>:11434`."
         },
         "oreo.githubMcp.path": {
           "type": "string",

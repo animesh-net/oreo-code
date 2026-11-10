@@ -1,28 +1,25 @@
 // Messages between the extension host and the chat webview.
 // Shared by both bundles, so keep this file free of Node and DOM imports.
 
-/** Where oreo-ai runs a model: Cloudflare Workers AI or the MacBook's Ollama. */
-export type ModelProvider = 'cloudflare' | 'macbook';
+/** Where a model runs: the MacBook's Ollama. */
+export type ModelProvider = 'macbook';
 
 export interface ModelInfo {
   id: string;
   name: string;
   provider: ModelProvider;
   supportsTools: boolean;
-  /** False when the model can't answer right now, e.g. the MacBook is asleep. */
+  /** False when Ollama doesn't have the model installed. */
   available: boolean;
 }
 
-/** How long a model may think before answering; sent to oreo-ai as reasoning_effort. */
+/** How long a model may think before answering; sent to Ollama as reasoning_effort. */
 export type ReasoningEffort = 'none' | 'low' | 'medium' | 'high';
 
 export const REASONING_EFFORTS: readonly ReasoningEffort[] = ['none', 'low', 'medium', 'high'];
 
-/** Until you pick otherwise: Cloudflare models think at medium, the Mac's 4B/2B models don't think. */
-export const DEFAULT_EFFORT: Readonly<Record<ModelProvider, ReasoningEffort>> = {
-  cloudflare: 'medium',
-  macbook: 'none',
-};
+/** Until you pick otherwise the models don't think: they are small and slow to think on the M1. */
+export const DEFAULT_EFFORT: ReasoningEffort = 'none';
 
 export type ChatRole = 'user' | 'assistant';
 
@@ -32,11 +29,11 @@ export interface ChatMessage {
 }
 
 export interface ViewState {
-  signedIn: boolean;
-  serverUrl: string;
+  /** The normalized "oreo.ollamaUrl" setting. */
+  ollamaUrl: string;
   models: ModelInfo[];
   selectedModel?: string;
-  /** The thinking effort for the selected model's provider. */
+  /** The thinking effort sent with each message. */
   effort: ReasoningEffort;
   messages: ChatMessage[];
   busy: boolean;
@@ -55,6 +52,5 @@ export type FromWebview =
   | { type: 'stop' }
   | { type: 'selectModel'; modelId: string }
   | { type: 'selectEffort'; effort: ReasoningEffort }
-  | { type: 'signIn' }
   | { type: 'newChat' }
   | { type: 'retry' };

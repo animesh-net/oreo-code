@@ -19,7 +19,7 @@
 - No secrets in the repo. API keys, tokens and passwords never go in code or
   committed files; keep them in untracked local env files or the deployment
   host.
-- Never commit a real oreo-ai API token or GitHub token, even in a test.
+- Never commit a real GitHub token, even in a test.
 - No `Co-Authored-By:`, `Co-committed-by:` or any other trailer that names an
   AI agent (Claude, GitHub Copilot, GPT, ...). The git author and committer
   must identify a real person. Agents must not change `user.name` or
@@ -103,17 +103,19 @@ fix/<name_fix>` from it, push the new name, then ask before deleting the old
 
 # This repo
 
-oreo-code is the VS Code extension for oreo-ai. All coding work runs on the Mac,
-inside this extension; the oreo-ai server on the Pi only proxies model calls
-(`/api/models`, `/api/llm/v1/chat/completions`), issues API tokens and reports
-usage. The plan: sidebar chat (now), then a local `github-mcp-server` over stdio,
-an agent loop with approval cards, and local workspace tools.
+oreo-code is a VS Code extension that chats with the Oreo models on the Mac's own
+Ollama. All work runs on the Mac, inside this extension: it calls Ollama directly
+(`GET /api/tags` for the model list, `POST /v1/chat/completions` streamed over
+SSE) at the `oreo.ollamaUrl` setting. The oreo-ai server is not used: no API
+token, no sign-in. The models are created from the Modelfiles in oreo-ai's
+`ollama/` folder. The plan: sidebar chat and a local `github-mcp-server` over
+stdio (now), then an agent loop with approval cards, and local workspace tools.
 
 | Path                     | What it is                                                                                             |
 | ------------------------ | ------------------------------------------------------------------------------------------------------ |
 | `src/extension.ts`       | `activate()`: commands, sidebar view, status bar                                                       |
 | `src/auth/`              | Secrets in VS Code SecretStorage (the macOS Keychain)                                                  |
-| `src/gateway/`           | oreo-ai's model gateway (OpenAI-compatible), model list and error wording                              |
+| `src/ollama/`            | Ollama client (OpenAI-compatible), the fixed model list, URL check and error wording                   |
 | `src/chat/`              | Chat state and turns; no `vscode` imports, unit tested                                                 |
 | `src/views/`             | Webview host, CSP, message relay                                                                       |
 | `src/mcp/`               | Pinned `github-mcp-server` download, MCP host and stdio client                                         |
@@ -126,17 +128,17 @@ an agent loop with approval cards, and local workspace tools.
 
 ## Rules for the code
 
-- **Secrets stay in SecretStorage.** The oreo-ai API token (and later the GitHub
-  token) live only in `src/auth/`. Never log them, put them in settings or send
-  the GitHub token to oreo-ai.
+- **Secrets stay in SecretStorage.** The GitHub token lives only in `src/auth/`.
+  Never log it, put it in settings or send it to Ollama.
 - **Model output is untrusted.** The webview renders it as plain text. Keep the
   CSP in `src/views/chatViewProvider.ts` strict: no inline scripts, no remote
   content, no `unsafe-eval`. If Markdown rendering is added, raw HTML stays off
   and links are limited to http and https.
-- **No model ids and no model editing.** The four models are fixed in oreo-ai's
-  config and come from `GET /api/models`. The extension only offers a dropdown;
-  agent mode uses only models with `supportsTools: true`.
-- **Testable core.** `src/chat/`, `src/gateway/`, `src/mcp/` and `src/agent/` have no `vscode` imports; VS
+- **Models are named once** in `src/ollama/models.ts` (`OREO_MODELS`); no model id
+  anywhere else and no model editing. Ollama's `GET /api/tags` only marks which
+  are installed. The extension only offers a dropdown; agent mode uses only
+  models with `supportsTools: true`.
+- **Testable core.** `src/chat/`, `src/ollama/`, `src/mcp/` and `src/agent/` have no `vscode` imports; VS
   Code wiring goes in `src/extension.ts`, `src/views/` and `src/auth/`.
 - **Agent safety lives in code.** Only the write tools in `ALLOWED_WRITES`
   (`src/agent/catalog.ts`) are offered; a tool without `readOnlyHint: true` is a
@@ -146,9 +148,9 @@ an agent loop with approval cards, and local workspace tools.
 - **Pinned MCP server.** `GITHUB_MCP_VERSION` changes only in a PR; the download
   must match the release's SHA-256. The child gets a minimal environment plus the
   token and `GITHUB_TOOLSETS`, never the whole VS Code environment.
-- **Errors in one sentence.** Gateway failures are worded in
-  `src/gateway/errors.ts`; oreo-ai answers in the OpenAI `{"error":{"message"}}`
-  shape.
+- **Errors in one sentence.** Ollama failures are worded in
+  `src/ollama/errors.ts`; Ollama answers `{"error":{"message"}}` on `/v1` and
+  `{"error":"..."}` on its native API.
 - **Packaging.** `@types/vscode` must not be newer than `engines.vscode`; raise
   both together. `.vscodeignore` ships only `dist/`, `media/`, `package.json`,
   `README.md` and `LICENSE`.
@@ -176,6 +178,5 @@ tests and packages the VSIX. The review commands in `.claude/commands/`
 | --------------------------------------------------------- | -------------------------------------------------- |
 | `external: ['vscode']` in `esbuild.mjs`                   | `vscode` exists only at runtime; bundling it fails |
 | `retainContextWhenHidden` on the chat view                | Hiding the sidebar would drop a streaming reply    |
-| The `oreo.apiToken` SecretStorage key                     | Everyone would be signed out after an update       |
 | The `oreo.githubToken` SecretStorage key                  | The GitHub token would have to be entered again    |
 | `acquireVsCodeApi()` called once (`webview-ui/vscode.ts`) | A second call throws and the webview goes blank    |

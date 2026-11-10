@@ -1,49 +1,45 @@
-import type { Gateway } from '../gateway/client';
-import { describeGatewayError } from '../gateway/errors';
-import { normalizeServerUrl } from '../gateway/serverUrl';
+import type { ModelClient } from '../ollama/client';
+import { describeOllamaError } from '../ollama/errors';
+import { normalizeOllamaUrl } from '../ollama/url';
 import {
   DEFAULT_EFFORT,
   REASONING_EFFORTS,
   type ChatMessage,
   type FromWebview,
   type ModelInfo,
-  type ModelProvider,
   type ReasoningEffort,
   type ToWebview,
   type ViewState,
 } from '../shared/protocol';
 
 export interface ChatControllerDeps {
-  /** Raw "oreo.serverUrl" setting. */
-  getServerUrl(): string;
+  /** Raw "oreo.ollamaUrl" setting. */
+  getOllamaUrl(): string;
   /** The model picked last time in the dropdown, if any. */
   getLastModel(): string | undefined;
   /** Remembers the dropdown choice for next time. */
   rememberModel(modelId: string): void;
-  /** The thinking effort picked last time for a provider, if any. */
-  getEffort(provider: ModelProvider): ReasoningEffort | undefined;
-  /** Remembers the thinking effort picked for a provider. */
-  rememberEffort(provider: ModelProvider, effort: ReasoningEffort): void;
-  getToken(): Promise<string | undefined>;
-  createGateway(serverUrl: string, token: string): Gateway;
+  /** The thinking effort picked last time, if any. */
+  getEffort(): ReasoningEffort | undefined;
+  /** Remembers the thinking effort picked in the dropdown. */
+  rememberEffort(effort: ReasoningEffort): void;
+  createClient(ollamaUrl: string): ModelClient;
   /** Sends a message to the webview (a no-op while the view is closed). */
   post(message: ToWebview): void;
-  /** Runs the "Oreo: Sign in" flow. */
-  signIn(): Promise<void>;
   /** Called after every state change, e.g. to update the status bar. */
   onState?(state: ViewState): void;
 }
 
 /**
- * Owns the chat: sign-in state, the model list and the conversation.
+ * Owns the chat: the Ollama connection, the model list and the conversation.
  * Free of `vscode` imports so it can be unit tested.
  *
  * A turn is kept only if it finished or you stopped it; a failed turn is
  * removed and its text goes back into the input box.
  */
 export class ChatController {
-  private serverUrl = '';
-  private gateway: Gateway | undefined;
+  private ollamaUrl = '';
+  private client: ModelClient | undefined;
   private models: ModelInfo[] = [];
   private selectedModel: string | undefined;
   private messages: ChatMessage[] = [];
@@ -54,38 +50,34 @@ export class ChatController {
 
   constructor(private readonly deps: ChatControllerDeps) {}
 
-  /** Re-reads settings and token, then reloads the model list. */
+  /** Re-reads the Ollama URL setting, then reloads the model list. */
   async refresh(): Promise<void> {
     const seq = ++this.refreshSeq;
     this.error = undefined;
-    this.gateway = undefined;
+    this.client = undefined;
     this.models = [];
     try {
-      this.serverUrl = normalizeServerUrl(this.deps.getServerUrl());
+      this.ollamaUrl = normalizeOllamaUrl(this.deps.getOllamaUrl());
     } catch (err) {
-      this.serverUrl = this.deps.getServerUrl();
+      this.ollamaUrl = this.deps.getOllamaUrl();
       this.error = (err as Error).message;
       this.publish();
       return;
     }
-    const token = await this.deps.getToken();
-    if (seq !== this.refreshSeq) return;
-    if (!token) {
-      this.publish();
-      return;
-    }
-    const gateway = this.deps.createGateway(this.serverUrl, token);
-    this.gateway = gateway;
+    const client = this.deps.createClient(this.ollamaUrl);
+    this.client = client;
     this.publish();
     try {
-      const models = await gateway.listModels();
+      const models = await client.listModels();
       if (seq !== this.refreshSeq) return;
       this.models = models;
       this.selectedModel = pickModel(models, this.selectedModel, this.deps.getLastModel());
-      if (models.length === 0) this.error = 'oreo-ai has no models for your account.';
+      if (!this.selectedModel) {
+        this.error = `Ollama at ${this.ollamaUrl} has none of the Oreo models. Create them from oreo-ai's Modelfiles.`;
+      }
     } catch (err) {
       if (seq !== this.refreshSeq) return;
-      this.error = describeGatewayError(err, this.serverUrl);
+      this.error = describeOllamaError(err, this.ollamaUrl);
     }
     this.publish();
   }
@@ -108,16 +100,11 @@ export class ChatController {
           this.publish();
         }
         return;
-      case 'selectEffort': {
-        const provider = this.selectedProvider;
-        if (provider && REASONING_EFFORTS.includes(message.effort)) {
-          this.deps.rememberEffort(provider, message.effort);
+      case 'selectEffort':
+        if (REASONING_EFFORTS.includes(message.effort)) {
+          this.deps.rememberEffort(message.effort);
           this.publish();
         }
-        return;
-      }
-      case 'signIn':
-        await this.deps.signIn();
         return;
       case 'newChat':
         this.newChat();
@@ -137,8 +124,7 @@ export class ChatController {
 
   get state(): ViewState {
     return {
-      signedIn: this.gateway !== undefined,
-      serverUrl: this.serverUrl,
+      ollamaUrl: this.ollamaUrl,
       models: this.models,
       selectedModel: this.selectedModel,
       effort: this.effort,
@@ -148,21 +134,17 @@ export class ChatController {
     };
   }
 
-  private get selectedProvider(): ModelProvider | undefined {
-    return this.models.find((m) => m.id === this.selectedModel)?.provider;
-  }
-
-  /** Your pick for the selected model's provider, or its default. */
+  /** Your last pick, or the default. */
   private get effort(): ReasoningEffort {
-    const provider = this.selectedProvider ?? 'cloudflare';
-    return this.deps.getEffort(provider) ?? DEFAULT_EFFORT[provider];
+    const saved = this.deps.getEffort();
+    return saved && REASONING_EFFORTS.includes(saved) ? saved : DEFAULT_EFFORT;
   }
 
   private async send(rawText: string): Promise<void> {
     const text = rawText.trim();
-    const gateway = this.gateway;
+    const client = this.client;
     const model = this.selectedModel;
-    if (!text || this.busy || !gateway || !model) return;
+    if (!text || this.busy || !client || !model) return;
 
     const turnStart = this.messages.length;
     this.messages.push({ role: 'user', content: text });
@@ -175,7 +157,7 @@ export class ChatController {
 
     let reply = '';
     try {
-      for await (const delta of gateway.streamChat(model, history, abort.signal, this.effort)) {
+      for await (const delta of client.streamChat(model, history, abort.signal, this.effort)) {
         reply += delta;
         this.deps.post({ type: 'delta', text: delta });
       }
@@ -187,7 +169,7 @@ export class ChatController {
         else this.messages.splice(turnStart);
       } else {
         this.messages.splice(turnStart);
-        const message = describeGatewayError(err, this.serverUrl);
+        const message = describeOllamaError(err, this.ollamaUrl, model);
         this.error = message;
         this.deps.post({ type: 'failed', message, draft: text });
       }
@@ -207,8 +189,8 @@ export class ChatController {
 
 /**
  * Keeps the current choice if still available, else the last dropdown choice,
- * else the first available model (oreo-ai lists its default first).
- * Unavailable models (MacBook asleep) are skipped.
+ * else the first available model (the default is listed first).
+ * Models Ollama doesn't have are skipped.
  */
 export function pickModel(
   models: ModelInfo[],

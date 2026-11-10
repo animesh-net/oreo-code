@@ -54,14 +54,6 @@ textarea:focus {
   color: var(--vscode-errorForeground);
 }
 
-.signin {
-  padding: 16px;
-}
-.signin h2 {
-  font-size: 1.1em;
-  margin: 0 0 8px;
-}
-
 .chat {
   display: flex;
   flex-direction: column;

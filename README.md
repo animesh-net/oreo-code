@@ -1,21 +1,21 @@
 # Oreo Code
 
-A VS Code extension for [oreo-ai](https://github.com/animesh-net/oreo-ai). It gives you oreo-ai chat in the VS Code sidebar, and will grow into a coding agent that works on your GitHub repos from the Mac.
+A VS Code extension that chats with the Oreo models on your Mac's own [Ollama](https://ollama.com), in the VS Code sidebar, and will grow into a coding agent that works on your GitHub repos from the Mac.
 
-All coding work runs on the Mac, inside this extension. The oreo-ai server on the Pi only proxies model calls, issues API tokens and enforces the daily usage cap.
+Everything runs on the Mac, inside this extension: it calls Ollama directly, with no API token, no sign-in and no oreo-ai server in between. The models themselves come from the Modelfiles in [oreo-ai](https://github.com/animesh-net/oreo-ai)'s `ollama/` folder.
 
 ## Status
 
-| Milestone | What it adds                                                               | State        |
-| --------- | -------------------------------------------------------------------------- | ------------ |
-| M3        | Sidebar chat through the oreo-ai model gateway, sign-in, CI, VSIX releases | Done         |
-| M4        | Local `github-mcp-server` (stdio), tool catalog, policy rules              | This release |
-| M5        | Agent loop, approval cards, local session history                          | Next         |
-| M6        | Local workspace tools (unsaved files, diff-view edits, build/test)         | Planned      |
+| Milestone | What it adds                                                       | State        |
+| --------- | ------------------------------------------------------------------ | ------------ |
+| M3        | Sidebar chat, CI, VSIX releases (now straight to Ollama)           | Done         |
+| M4        | Local `github-mcp-server` (stdio), tool catalog, policy rules      | This release |
+| M5        | Agent loop, approval cards, local session history                  | Next         |
+| M6        | Local workspace tools (unsaved files, diff-view edits, build/test) | Planned      |
 
-oreo-ai offers four models: two on Cloudflare Workers AI and two on the MacBook's Ollama. The list is fixed in oreo-ai's config; the extension only offers a dropdown to switch between them. It groups them by where they run, greys out the MacBook models while the MacBook is unreachable, and remembers your last pick.
+The extension offers two models, fixed in `src/ollama/models.ts`: **Oreo 4B** (`oreo-4b`, can use tools) and **Oreo 2B** (`oreo-2b`). The dropdown switches between them, greys out any model Ollama doesn't have (matched as `oreo-4b` or `oreo-4b:latest`), and remembers your last pick.
 
-Chat uses the oreo-ai model gateway (`GET /api/models` and `POST /api/llm/v1/chat/completions`).
+Chat uses Ollama's own endpoints: `GET <oreo.ollamaUrl>/api/tags` to see which models are installed, and the OpenAI-compatible `POST <oreo.ollamaUrl>/v1/chat/completions`, streamed over SSE. The extension host makes these calls, not the webview.
 
 ## Install
 
@@ -31,17 +31,21 @@ For the latest version-tagged release instead, drop the first line and `$tag`. `
 
 ## Use
 
-1. In oreo-ai, open **Settings → API tokens** and create a token (it starts with `oreo_`).
-2. In VS Code, open the **Oreo** view in the activity bar and choose **Sign in**, or run `Oreo: Sign in`.
-3. Pick a model and how much it may think, and chat. The **Thinking** dropdown (off, low, medium, high) is sent with every message as `reasoning_effort`; it starts at medium for the Cloudflare models and off for the MacBook models, which are small and slow to think on the M1, and remembers your pick separately for each. oreo-ai passes it on unchanged. **Stop** keeps the partial reply; a failed reply is discarded and your text goes back into the box.
+1. Install [Ollama](https://ollama.com) on the Mac and create the two models from the Modelfiles in oreo-ai's `ollama/` folder:
 
-The token is stored in VS Code SecretStorage, which on macOS is the Keychain. It is never written to settings files.
+   ```powershell
+   ollama create oreo-4b -f ~/oreo-ai/ollama/Modelfile.oreo-4b
+   ollama create oreo-2b -f ~/oreo-ai/ollama/Modelfile.oreo-2b
+   ```
 
-You need to be on Tailscale to reach the oreo-ai server.
+2. Point `oreo.ollamaUrl` at Ollama. The default, `http://127.0.0.1:11434`, works when Ollama listens on localhost. If it listens only on the Mac's Tailscale address, set `oreo.ollamaUrl` to `http://<tailscale ip>:11434`, or start Ollama with `OLLAMA_HOST=0.0.0.0` so it also answers on localhost. Changing the setting reloads the model list.
+3. Open the **Oreo** view in the activity bar, pick a model and how much it may think, and chat. The **Thinking** dropdown (off, low, medium, high) is sent with every message as `reasoning_effort`; it starts off, because the models are small and slow to think on the M1, and remembers your pick. `none` turns thinking off. **Stop** keeps the partial reply; a failed reply is discarded and your text goes back into the box.
+
+If Ollama isn't running, the view says so in one line and offers **Retry**.
 
 ## GitHub tools
 
-The coding agent (next milestone) works on your GitHub repos through GitHub's own MCP server, which runs on this Mac as a child process of the extension. Nothing about GitHub goes through oreo-ai.
+The coding agent (next milestone) works on your GitHub repos through GitHub's own MCP server, which runs on this Mac as a child process of the extension. Nothing about GitHub goes to Ollama.
 
 1. On GitHub, create a fine-grained token (Settings → Developer settings → Fine-grained tokens). Give it only the repos the agent may work on, with **Contents** and **Pull requests** set to read and write (**Metadata** read is added for you). 90 days is a good expiry.
 2. Run `Oreo: Set GitHub token` and paste it. It is stored in the Keychain and passed only to the local `github-mcp-server`.
@@ -53,17 +57,15 @@ To use your own build of the server instead, set `oreo.githubMcp.path` to it.
 
 ## Settings
 
-| Setting               | Default                     | Purpose                                                                 |
-| --------------------- | --------------------------- | ----------------------------------------------------------------------- |
-| `oreo.serverUrl`      | `https://ai.animesh.org.in` | Base URL of your oreo-ai server                                         |
-| `oreo.githubMcp.path` | (empty)                     | Your own `github-mcp-server` binary; empty downloads the pinned release |
+| Setting               | Default                  | Purpose                                                                   |
+| --------------------- | ------------------------ | ------------------------------------------------------------------------- |
+| `oreo.ollamaUrl`      | `http://127.0.0.1:11434` | Base URL of Ollama; use `http://<tailscale ip>:11434` if it listens there |
+| `oreo.githubMcp.path` | (empty)                  | Your own `github-mcp-server` binary; empty downloads the pinned release   |
 
 ## Commands
 
 | Command                    | What it does                                                                      |
 | -------------------------- | --------------------------------------------------------------------------------- |
-| `Oreo: Sign in`            | Stores an oreo-ai API token and loads your models                                 |
-| `Oreo: Sign out`           | Removes the stored token                                                          |
 | `Oreo: New chat`           | Clears the conversation (also the + button on the view)                           |
 | `Oreo: Set GitHub token`   | Stores the GitHub token for the local `github-mcp-server`                         |
 | `Oreo: Clear GitHub token` | Removes it                                                                        |
@@ -88,11 +90,11 @@ Press **F5** in VS Code to start an Extension Development Host with the extensio
 ```text
 src/
   extension.ts              activate(): commands, sidebar view, status bar
-  auth/tokenStore.ts        oreo-ai API token in SecretStorage
   auth/githubToken.ts       GitHub token in SecretStorage
-  gateway/client.ts         oreo-ai model gateway (OpenAI-compatible) and model list
-  gateway/errors.ts         one-sentence error messages for the chat view
-  gateway/serverUrl.ts      validates the oreo.serverUrl setting
+  ollama/models.ts          the two Oreo models, named once, and which Ollama has
+  ollama/client.ts          Ollama's /api/tags and OpenAI-compatible /v1 chat
+  ollama/errors.ts          one-sentence error messages for the chat view
+  ollama/url.ts             validates the oreo.ollamaUrl setting
   chat/chatController.ts    chat state and turns; no vscode imports, unit tested
   views/chatViewProvider.ts webview host, CSP, message relay
   shared/protocol.ts        messages between the extension and the webview
