@@ -1,12 +1,27 @@
 import { render } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
-import type { ChatMessage, ModelInfo, ToWebview, ViewState } from '../src/shared/protocol';
+import {
+  REASONING_EFFORTS,
+  type ChatMessage,
+  type ModelInfo,
+  type ReasoningEffort,
+  type ToWebview,
+  type ViewState,
+} from '../src/shared/protocol';
 import { vscode } from './vscode';
 import './styles.css';
+
+const EFFORT_LABELS: Record<ReasoningEffort, string> = {
+  none: 'Thinking: off',
+  low: 'Thinking: low',
+  medium: 'Thinking: medium',
+  high: 'Thinking: high',
+};
 
 const emptyState: ViewState = {
   signedIn: false,
   serverUrl: '',
+  effort: 'medium',
   models: [],
   messages: [],
   busy: false,
@@ -84,6 +99,21 @@ function App() {
           {state.models.length === 0 && <option value="">No models</option>}
           <ModelGroup label="Cloudflare" models={state.models.filter((m) => m.provider === 'cloudflare')} />
           <ModelGroup label="MacBook" models={state.models.filter((m) => m.provider === 'macbook')} />
+        </select>
+        <select
+          aria-label="Thinking"
+          title="How long the model may think before answering"
+          value={state.effort}
+          disabled={state.busy || !state.selectedModel}
+          onChange={(e) =>
+            vscode.postMessage({ type: 'selectEffort', effort: e.currentTarget.value as ReasoningEffort })
+          }
+        >
+          {REASONING_EFFORTS.map((effort) => (
+            <option key={effort} value={effort}>
+              {EFFORT_LABELS[effort]}
+            </option>
+          ))}
         </select>
       </header>
 

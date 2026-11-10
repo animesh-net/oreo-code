@@ -1,11 +1,16 @@
 import OpenAI from 'openai';
-import type { ChatMessage, ModelInfo } from '../shared/protocol';
+import type { ChatMessage, ModelInfo, ReasoningEffort } from '../shared/protocol';
 import { GatewayHttpError } from './errors';
 
 /** What the chat controller needs from oreo-ai. */
 export interface Gateway {
   listModels(signal?: AbortSignal): Promise<ModelInfo[]>;
-  streamChat(model: string, messages: ChatMessage[], signal: AbortSignal): AsyncIterable<string>;
+  streamChat(
+    model: string,
+    messages: ChatMessage[],
+    signal: AbortSignal,
+    effort: ReasoningEffort,
+  ): AsyncIterable<string>;
 }
 
 type FetchLike = typeof fetch;
@@ -44,8 +49,17 @@ export class OreoGateway implements Gateway {
     return parseModels(await res.json());
   }
 
-  async *streamChat(model: string, messages: ChatMessage[], signal: AbortSignal): AsyncIterable<string> {
-    const stream = await this.openai.chat.completions.create({ model, messages, stream: true }, { signal });
+  async *streamChat(
+    model: string,
+    messages: ChatMessage[],
+    signal: AbortSignal,
+    effort: ReasoningEffort,
+  ): AsyncIterable<string> {
+    // oreo-ai passes reasoning_effort on untouched; the extension always says how long to think.
+    const stream = await this.openai.chat.completions.create(
+      { model, messages, stream: true, reasoning_effort: effort },
+      { signal },
+    );
     for await (const chunk of stream) {
       const text = chunk.choices[0]?.delta?.content;
       if (text) yield text;
