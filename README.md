@@ -6,12 +6,12 @@ Everything runs on the Mac, inside this extension: it calls Ollama directly, wit
 
 ## Status
 
-| Milestone | What it adds                                                       | State        |
-| --------- | ------------------------------------------------------------------ | ------------ |
-| M3        | Sidebar chat, CI, VSIX releases (now straight to Ollama)           | Done         |
-| M4        | Local `github-mcp-server` (stdio), tool catalog, policy rules      | This release |
-| M5        | Agent loop, approval cards, local session history                  | Next         |
-| M6        | Local workspace tools (unsaved files, diff-view edits, build/test) | Planned      |
+| Milestone | What it adds                                                       | State                         |
+| --------- | ------------------------------------------------------------------ | ----------------------------- |
+| M3        | Sidebar chat, CI, VSIX releases (now straight to Ollama)           | Done                          |
+| M4        | Local `github-mcp-server` (stdio), tool catalog, policy rules      | Done                          |
+| M5        | Agent loop, approval cards, local session history                  | Started: read-only repo tools |
+| M6        | Local workspace tools (unsaved files, diff-view edits, build/test) | Started: reads unsaved files  |
 
 The extension offers two models, fixed in `src/ollama/models.ts`: **Oreo 4B** (`oreo-4b`, can use tools) and **Oreo 2B** (`oreo-2b`). The pill in the message box switches between them, greys out any model Ollama doesn't have (matched as `oreo-4b` or `oreo-4b:latest`), and remembers your last pick.
 
@@ -19,15 +19,15 @@ Chat uses Ollama's own endpoints: `GET <oreo.ollamaUrl>/api/tags` to see which m
 
 ## Install
 
-Every build of `main` is published as a prerelease named `main-<run>` with its VSIX attached; the 10 newest are kept. Version tags (`v0.1.0`) are full releases. To install the newest main build, in PowerShell:
+Every merge to `main` is published as a release with its VSIX attached, numbered in the `major.minor` series set in `package.json`: `v0.2.0`, then `v0.2.1`, `v0.2.2`, … (CI takes one past the newest `v0.2.*` tag and stamps it into the VSIX). To start a new series, change the version in `package.json` to, say, `0.3.0` in a PR; the next build is `v0.3.0`.
+
+Install once by hand, in PowerShell:
 
 ```powershell
-$tag = gh release list --repo animesh-net/oreo-code --limit 20 --json tagName,isPrerelease --jq '[.[] | select(.isPrerelease)][0].tagName'
-gh release download $tag --repo animesh-net/oreo-code --pattern '*.vsix' --dir ~/Downloads --clobber
-code --install-extension (Get-ChildItem ~/Downloads/oreo-code-*.vsix | Sort-Object LastWriteTime | Select-Object -Last 1).FullName --force
+gh release download --repo animesh-net/oreo-code --pattern '*.vsix' --dir ~/Downloads --clobber; code --install-extension (Get-ChildItem ~/Downloads/oreo-code-*.vsix | Sort-Object LastWriteTime | Select-Object -Last 1).FullName --force
 ```
 
-For the latest version-tagged release instead, drop the first line and `$tag`. `--force` replaces the installed build even when the version number is the same.
+After that the extension updates itself: 15 seconds after VS Code starts and every 6 hours it asks GitHub for the newest release and, if it's newer, downloads and installs it and offers **Reload**. `Oreo Code: Check for updates` checks straight away. The repository is private, so this uses the GitHub token from `Oreo Code: Set GitHub token`, which needs **Contents (read)** on `animesh-net/oreo-code` as well as on the repos the agent works on. Turn it off with `oreo.autoUpdate`.
 
 ## Use
 
@@ -38,8 +38,9 @@ For the latest version-tagged release instead, drop the first line and `$tag`. `
    ollama create oreo-2b -f ~/oreo-ai/ollama/Modelfile.oreo-2b
    ```
 
-2. Point `oreo.ollamaUrl` at Ollama. The default, `http://127.0.0.1:11434`, works when Ollama listens on localhost. If it listens only on the Mac's Tailscale address, set `oreo.ollamaUrl` to `http://<tailscale ip>:11434`, or start Ollama with `OLLAMA_HOST=0.0.0.0` so it also answers on localhost. Changing the setting reloads the model list.
-3. Open the **Oreo** view in the activity bar, and chat. As in the Claude app, the message box has the text on top and, below it, a pill showing the model and whether it thinks (for example **Oreo 4B Thinking off**) and a round Send button. The pill opens one menu for the model and for **Thinking**, which offers only what the model takes: both models are qwen3.5, which can only think or not, so it shows **Off** and **On** (each model's style is set once in `src/ollama/models.ts`). The pick is sent with every message as `reasoning_effort`: `none` for Off, and the remembered level for On (medium the first time), which Ollama turns into thinking on. It starts off, because the models are small and slow to think on the M1, and remembers your pick. **Stop** keeps the partial reply; a failed reply is discarded and your text goes back into the box.
+2. Leave `oreo.ollamaUrl` at its default, `http://127.0.0.1:11434`. If nothing answers there, the extension looks for Ollama at the same port on the Mac's Tailscale address (any `100.64.0.0/10` address on its network interfaces, found without the `tailscale` command), which is where oreo-ai's `scripts/oreo-ai.sh models` makes it listen, and uses the first that answers. It looks again each time the model list loads (start-up, **Retry**, a settings change), so it follows Ollama when it moves. Set `oreo.ollamaUrl` to another address only if Ollama is elsewhere; a non-local address is used as given. Changing the setting reloads the model list.
+3. Open the **Oreo Code** view in the activity bar, and chat. As in the Claude app, the message box has the text on top and, below it, a pill showing the model and whether it thinks (for example **Oreo 4B Thinking off**) and a round Send button. The pill opens one menu for the model and for **Thinking**, which offers only what the model takes: both models are qwen3.5, which can only think or not, so it shows **Off** and **On** (each model's style is set once in `src/ollama/models.ts`). The pick is sent with every message as `reasoning_effort`: `none` for Off, and the remembered level for On (medium the first time), which Ollama turns into thinking on. It starts off, because the models are small and slow to think on the M1, and remembers your pick. **Stop** keeps the partial reply; a failed reply is discarded and your text goes back into the box.
+4. Ask about the open repository. Every message carries a snapshot of it: the folder name, the branch, its file list (without `node_modules`, `.git`, build output and `files.exclude`) and the file in the active editor with any selection. **Oreo 4B** can also use three read-only tools while it answers: `list_files`, `search` and `read_file` (with line numbers, 12,000 characters at a time, unsaved editor text first). Each one it uses is shown above its reply, for example **→ Read src/extension.ts**. It gets up to 8 rounds of tools, then must answer. It can't change files; it suggests changes as code. Files that may hold secrets (`.env*`, keys, `.npmrc`, `secrets.*`) are never read, searched or sent. **Oreo 2B** can't use tools, so it sees only the snapshot and asks you to open other files.
 
 If Ollama isn't running, the view says so in one line and offers **Retry**.
 
@@ -48,8 +49,8 @@ If Ollama isn't running, the view says so in one line and offers **Retry**.
 The coding agent (next milestone) works on your GitHub repos through GitHub's own MCP server, which runs on this Mac as a child process of the extension. Nothing about GitHub goes to Ollama.
 
 1. On GitHub, create a fine-grained token (Settings → Developer settings → Fine-grained tokens). Give it only the repos the agent may work on, with **Contents** and **Pull requests** set to read and write (**Metadata** read is added for you). 90 days is a good expiry.
-2. Run `Oreo: Set GitHub token` and paste it. It is stored in the Keychain and passed only to the local `github-mcp-server`.
-3. Run `Oreo: Show GitHub tools`. The first time, the extension downloads `github-mcp-server` 2.1.0 for your Mac from GitHub's releases into its own storage, and refuses it unless it matches the SHA-256 in the release's checksums file. The **Oreo** output panel then lists the tools.
+2. Run `Oreo Code: Set GitHub token` and paste it. It is stored in the Keychain and passed only to the local `github-mcp-server`.
+3. Run `Oreo Code: Show GitHub tools`. The first time, the extension downloads `github-mcp-server` 2.1.0 for your Mac from GitHub's releases into its own storage, and refuses it unless it matches the SHA-256 in the release's checksums file. The **Oreo Code** output panel then lists the tools.
 
 The server gets only the `context`, `repos` and `pull_requests` tool groups. Read tools (files, search, branches, commits, pull requests) run straight away. Only four write tools are offered — create a branch, commit files, write one file, and open a pull request — and they will always ask for your approval. The rules are checked in code: new branches must be named `oreo-agent/<name>`, commits go only to `oreo-agent/` branches (never `main` or `master`), and pull requests go from an `oreo-agent/` branch into `main`. Merging, deleting, forking and settings tools are never offered; you merge the pull requests yourself. Long tool results are cut at 20,000 characters.
 
@@ -57,19 +58,21 @@ To use your own build of the server instead, set `oreo.githubMcp.path` to it.
 
 ## Settings
 
-| Setting               | Default                  | Purpose                                                                   |
-| --------------------- | ------------------------ | ------------------------------------------------------------------------- |
-| `oreo.ollamaUrl`      | `http://127.0.0.1:11434` | Base URL of Ollama; use `http://<tailscale ip>:11434` if it listens there |
-| `oreo.githubMcp.path` | (empty)                  | Your own `github-mcp-server` binary; empty downloads the pinned release   |
+| Setting               | Default                  | Purpose                                                                         |
+| --------------------- | ------------------------ | ------------------------------------------------------------------------------- |
+| `oreo.ollamaUrl`      | `http://127.0.0.1:11434` | Base URL of Ollama; on a local address the Mac's Tailscale address is tried too |
+| `oreo.githubMcp.path` | (empty)                  | Your own `github-mcp-server` binary; empty downloads the pinned release         |
+| `oreo.autoUpdate`     | `true`                   | Install new releases from GitHub by itself and offer a reload                   |
 
 ## Commands
 
-| Command                    | What it does                                                                      |
-| -------------------------- | --------------------------------------------------------------------------------- |
-| `Oreo: New chat`           | Clears the conversation (also the + button on the view)                           |
-| `Oreo: Set GitHub token`   | Stores the GitHub token for the local `github-mcp-server`                         |
-| `Oreo: Clear GitHub token` | Removes it                                                                        |
-| `Oreo: Show GitHub tools`  | Starts `github-mcp-server` if needed and lists its tools in the Oreo output panel |
+| Command                         | What it does                                                                           |
+| ------------------------------- | -------------------------------------------------------------------------------------- |
+| `Oreo Code: New chat`           | Clears the conversation (also the + button on the view)                                |
+| `Oreo Code: Set GitHub token`   | Stores the GitHub token for the local `github-mcp-server`                              |
+| `Oreo Code: Clear GitHub token` | Removes it                                                                             |
+| `Oreo Code: Show GitHub tools`  | Starts `github-mcp-server` if needed and lists its tools in the Oreo Code output panel |
+| `Oreo Code: Check for updates`  | Installs the newest release now, if there is one                                       |
 
 ## Develop
 
@@ -94,8 +97,9 @@ src/
   ollama/models.ts          the two Oreo models, named once, and which Ollama has
   ollama/client.ts          Ollama's /api/tags and OpenAI-compatible /v1 chat
   ollama/errors.ts          one-sentence error messages for the chat view
-  ollama/url.ts             validates the oreo.ollamaUrl setting
-  chat/chatController.ts    chat state and turns; no vscode imports, unit tested
+  ollama/url.ts             validates the oreo.ollamaUrl setting, finds the Tailscale fallback
+  chat/chatController.ts    chat state, turns and the tool loop; no vscode imports, unit tested
+  chat/context.ts           the repo snapshot sent as the system prompt
   views/chatViewProvider.ts webview host, CSP, message relay
   shared/protocol.ts        messages between the extension and the webview
   mcp/githubBinary.ts       pinned github-mcp-server download and checksum check
@@ -103,12 +107,13 @@ src/
   mcp/stdioConnect.ts       MCP client over stdio (@modelcontextprotocol/sdk)
   agent/catalog.ts          MCP tools → namespaced function tools, read/write, allowlist
   agent/policy.ts           what runs, what needs approval, what is refused
+  agent/workspaceTools.ts   read-only list_files, read_file and search; secret files refused
+  workspace/vscodeWorkspace.ts  the open folder: files, unsaved text, branch, active editor
+  update/releases.ts        finds and downloads a newer release from GitHub
 webview-ui/                 Preact chat UI, bundled to dist/webview.js
 test/                       Vitest unit tests
 ```
 
 ## Releasing
 
-1. Bump `version` in `package.json` in a PR and merge it.
-2. Tag `main` with the same version, for example `git tag v0.1.0` and `git push origin v0.1.0`.
-3. The Release workflow checks the tag matches, runs the checks, and attaches the VSIX to a GitHub release.
+Merging to `main` releases: CI builds the VSIX, numbers it (see [Install](#install)) and publishes `v<version>` with generated notes. Installed copies pick it up within 6 hours, or at once with `Oreo Code: Check for updates`. For a new minor or major series, change `version` in `package.json` in the PR.

@@ -91,7 +91,7 @@ describe('OllamaClient', () => {
       new AbortController().signal,
       'none',
     )) {
-      parts.push(p);
+      if (p.type === 'text') parts.push(p.text);
     }
     expect(parts.join('')).toBe('Hello');
     expect(url).toBe(`${ollama}/v1/chat/completions`);
@@ -124,6 +124,45 @@ describe('OllamaClient', () => {
       expect(body).toMatchObject({ model, reasoning_effort: effort });
     },
   );
+});
+
+describe('tool calls', () => {
+  it('sends the tools and passes on tool calls once the stream ends, joined from their pieces', async () => {
+    let body: { tools?: unknown[] } = {};
+    const chunk = (delta: unknown) => `data: ${JSON.stringify({ choices: [{ index: 0, delta }] })}\n\n`;
+    const client = new OllamaClient(ollama, async (_input, init) => {
+      body = JSON.parse(String(init?.body));
+      const sse =
+        chunk({ content: 'Let me look.' }) +
+        chunk({
+          tool_calls: [
+            { index: 0, id: 'call_1', type: 'function', function: { name: 'read_file', arguments: '{"path":' } },
+          ],
+        }) +
+        chunk({ tool_calls: [{ index: 0, function: { arguments: '"src/a.ts"}' } }] }) +
+        'data: [DONE]\n\n';
+      return new Response(sse, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+    });
+    const tools = [{ type: 'function' as const, function: { name: 'read_file', description: 'd', parameters: {} } }];
+    const events = [];
+    for await (const e of client.streamChat(
+      'oreo-4b',
+      [{ role: 'user', content: 'hi' }],
+      new AbortController().signal,
+      'none',
+      tools,
+    )) {
+      events.push(e);
+    }
+    expect(body.tools).toEqual(tools);
+    expect(events).toEqual([
+      { type: 'text', text: 'Let me look.' },
+      {
+        type: 'toolCalls',
+        calls: [{ id: 'call_1', type: 'function', function: { name: 'read_file', arguments: '{"path":"src/a.ts"}' } }],
+      },
+    ]);
+  });
 });
 
 describe('describeOllamaError', () => {

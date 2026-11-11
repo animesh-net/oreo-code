@@ -1,17 +1,39 @@
 import OpenAI from 'openai';
-import type { ChatMessage, ModelInfo, ReasoningEffort } from '../shared/protocol';
+import type { ModelInfo, ReasoningEffort } from '../shared/protocol';
 import { OllamaHttpError } from './errors';
 import { modelsFromTags } from './models';
+
+/** A message as sent to Ollama, including the system prompt and tool turns. */
+export type WireMessage =
+  | { role: 'system' | 'user'; content: string }
+  | { role: 'assistant'; content: string; tool_calls?: ToolCall[] }
+  | { role: 'tool'; content: string; tool_call_id: string };
+
+export interface ToolCall {
+  id: string;
+  type: 'function';
+  function: { name: string; arguments: string };
+}
+
+/** An OpenAI-style function definition. */
+export interface FunctionTool {
+  type: 'function';
+  function: { name: string; description: string; parameters: Record<string, unknown> };
+}
+
+/** Text as it streams, then any tool calls the model made, once complete. */
+export type StreamEvent = { type: 'text'; text: string } | { type: 'toolCalls'; calls: ToolCall[] };
 
 /** What the chat controller needs from Ollama. */
 export interface ModelClient {
   listModels(signal?: AbortSignal): Promise<ModelInfo[]>;
   streamChat(
     model: string,
-    messages: ChatMessage[],
+    messages: WireMessage[],
     signal: AbortSignal,
     effort: ReasoningEffort,
-  ): AsyncIterable<string>;
+    tools?: FunctionTool[],
+  ): AsyncIterable<StreamEvent>;
 }
 
 type FetchLike = typeof fetch;
@@ -49,20 +71,41 @@ export class OllamaClient implements ModelClient {
 
   async *streamChat(
     model: string,
-    messages: ChatMessage[],
+    messages: WireMessage[],
     signal: AbortSignal,
     effort: ReasoningEffort,
-  ): AsyncIterable<string> {
+    tools?: FunctionTool[],
+  ): AsyncIterable<StreamEvent> {
     // Ollama's /v1 honours reasoning_effort: "none" turns thinking off, and on a model
     // that can only think or not (qwen3.5) any level turns it on.
     const stream = await this.openai.chat.completions.create(
-      { model, messages, stream: true, reasoning_effort: effort },
+      {
+        model,
+        messages: messages as OpenAI.Chat.ChatCompletionMessageParam[],
+        stream: true,
+        reasoning_effort: effort,
+        ...(tools?.length ? { tools } : {}),
+      },
       { signal },
     );
+    // Tool calls may arrive in pieces, by index; they are passed on once the stream ends.
+    const calls: ToolCall[] = [];
     for await (const chunk of stream) {
-      const text = chunk.choices[0]?.delta?.content;
-      if (text) yield text;
+      const delta = chunk.choices[0]?.delta;
+      if (delta?.content) yield { type: 'text', text: delta.content };
+      for (const part of delta?.tool_calls ?? []) {
+        const call = (calls[part.index] ??= {
+          id: part.id ?? `call_${part.index}`,
+          type: 'function',
+          function: { name: '', arguments: '' },
+        });
+        if (part.id) call.id = part.id;
+        if (part.function?.name) call.function.name += part.function.name;
+        if (part.function?.arguments) call.function.arguments += part.function.arguments;
+      }
     }
+    const complete = calls.filter((c) => c?.function.name);
+    if (complete.length) yield { type: 'toolCalls', calls: complete };
   }
 }
 

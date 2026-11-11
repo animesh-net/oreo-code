@@ -82,6 +82,16 @@ textarea:focus {
   word-wrap: break-word;
   line-height: 1.45;
 }
+.activity {
+  margin: 0 0 4px;
+  padding: 0;
+  list-style: none;
+  font-size: 0.9em;
+  color: var(--vscode-descriptionForeground);
+}
+.activity li::before {
+  content: '\2192  ';
+}
 .bubble.user .content {
   background: var(--vscode-input-background);
   border-radius: 4px;

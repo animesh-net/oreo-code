@@ -1,6 +1,8 @@
-import type { ModelClient } from '../ollama/client';
-import { describeOllamaError } from '../ollama/errors';
-import { normalizeOllamaUrl } from '../ollama/url';
+import { runWorkspaceTool, WORKSPACE_TOOLS, type Workspace } from '../agent/workspaceTools';
+import type { ModelClient, ToolCall, WireMessage } from '../ollama/client';
+import { buildSystemPrompt } from './context';
+import { describeOllamaError, isUnreachable } from '../ollama/errors';
+import { isLoopbackUrl, normalizeOllamaUrl } from '../ollama/url';
 import {
   DEFAULT_EFFORT,
   REASONING_EFFORTS,
@@ -24,6 +26,13 @@ export interface ChatControllerDeps {
   /** Remembers the thinking effort picked in the dropdown. */
   rememberEffort(effort: ReasoningEffort): void;
   createClient(ollamaUrl: string): ModelClient;
+  /**
+   * Other addresses to try when nothing answers at a local URL (127.0.0.1 or
+   * localhost): the Mac's Tailscale addresses, where oreo-ai's script binds Ollama.
+   */
+  fallbackOllamaUrls?(ollamaUrl: string): string[];
+  /** The open folder, for the repo snapshot and the read-only tools; none if no folder is open. */
+  getWorkspace?(): Workspace | undefined;
   /** Sends a message to the webview (a no-op while the view is closed). */
   post(message: ToWebview): void;
   /** Called after every state change, e.g. to update the status bar. */
@@ -37,6 +46,9 @@ export interface ChatControllerDeps {
  * A turn is kept only if it finished or you stopped it; a failed turn is
  * removed and its text goes back into the input box.
  */
+/** Tool rounds per reply; the last round gets no tools, so the model must answer. */
+export const MAX_TOOL_ROUNDS = 8;
+
 export class ChatController {
   private ollamaUrl = '';
   private client: ModelClient | undefined;
@@ -77,9 +89,36 @@ export class ChatController {
       }
     } catch (err) {
       if (seq !== this.refreshSeq) return;
-      this.error = describeOllamaError(err, this.ollamaUrl);
+      if (!(isUnreachable(err) && (await this.tryFallbacks(seq)))) {
+        if (seq !== this.refreshSeq) return;
+        this.error = describeOllamaError(err, this.ollamaUrl);
+      }
     }
+    if (seq !== this.refreshSeq) return;
     this.publish();
+  }
+
+  /** Looks for Ollama at the fallback addresses; uses the first that answers. */
+  private async tryFallbacks(seq: number): Promise<boolean> {
+    if (!isLoopbackUrl(this.ollamaUrl)) return false;
+    for (const url of this.deps.fallbackOllamaUrls?.(this.ollamaUrl) ?? []) {
+      const client = this.deps.createClient(url);
+      try {
+        const models = await client.listModels();
+        if (seq !== this.refreshSeq) return true;
+        this.ollamaUrl = url;
+        this.client = client;
+        this.models = models;
+        this.selectedModel = pickModel(models, this.selectedModel, this.deps.getLastModel());
+        if (!this.selectedModel) {
+          this.error = `Ollama at ${this.ollamaUrl} has none of the Oreo models. Create them from oreo-ai's Modelfiles.`;
+        }
+        return true;
+      } catch {
+        // Not there either; try the next one.
+      }
+    }
+    return false;
   }
 
   async handle(message: FromWebview): Promise<void> {
@@ -156,16 +195,49 @@ export class ChatController {
     this.publish();
 
     let reply = '';
+    const activity: string[] = [];
+    const finish = () => {
+      const message: ChatMessage = { role: 'assistant', content: reply };
+      if (activity.length) message.activity = activity;
+      this.messages.push(message);
+    };
     try {
-      for await (const delta of client.streamChat(model, history, abort.signal, this.effort)) {
-        reply += delta;
-        this.deps.post({ type: 'delta', text: delta });
+      const info = this.models.find((m) => m.id === model);
+      const workspace = this.deps.getWorkspace?.();
+      const tools = info?.supportsTools && workspace ? WORKSPACE_TOOLS : undefined;
+      const wire: WireMessage[] = [
+        { role: 'system', content: await buildSystemPrompt(workspace, !!tools) },
+        ...history.map((m) => ({ role: m.role, content: m.content })),
+      ];
+      for (let round = 1; round <= MAX_TOOL_ROUNDS; round++) {
+        let text = '';
+        let calls: ToolCall[] | undefined;
+        const offered = tools && round < MAX_TOOL_ROUNDS ? tools : undefined;
+        for await (const event of client.streamChat(model, wire, abort.signal, this.effort, offered)) {
+          if (event.type === 'toolCalls') {
+            calls = event.calls;
+            continue;
+          }
+          // A new round's text starts on its own paragraph.
+          const delta = !text && reply ? `\n\n${event.text}` : event.text;
+          text += event.text;
+          reply += delta;
+          this.deps.post({ type: 'delta', text: delta });
+        }
+        if (!calls?.length || !workspace) break;
+        wire.push({ role: 'assistant', content: text, tool_calls: calls });
+        for (const call of calls) {
+          const result = await runWorkspaceTool(workspace, call);
+          activity.push(result.summary);
+          this.deps.post({ type: 'activity', text: result.summary });
+          wire.push({ role: 'tool', tool_call_id: call.id, content: result.content });
+        }
       }
-      this.messages.push({ role: 'assistant', content: reply });
+      finish();
     } catch (err) {
       if (abort.signal.aborted) {
         // You pressed Stop: keep what arrived, if anything.
-        if (reply) this.messages.push({ role: 'assistant', content: reply });
+        if (reply) finish();
         else this.messages.splice(turnStart);
       } else {
         this.messages.splice(turnStart);
