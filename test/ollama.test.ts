@@ -127,12 +127,13 @@ describe('OllamaClient', () => {
 });
 
 describe('tool calls', () => {
-  it('sends the tools and passes on tool calls once the stream ends, joined from their pieces', async () => {
+  it('marks thinking, sends the tools and passes on tool calls once the stream ends, joined from their pieces', async () => {
     let body: { tools?: unknown[] } = {};
     const chunk = (delta: unknown) => `data: ${JSON.stringify({ choices: [{ index: 0, delta }] })}\n\n`;
     const client = new OllamaClient(ollama, async (_input, init) => {
       body = JSON.parse(String(init?.body));
       const sse =
+        chunk({ reasoning: 'hmm' }) +
         chunk({ content: 'Let me look.' }) +
         chunk({
           tool_calls: [
@@ -156,6 +157,7 @@ describe('tool calls', () => {
     }
     expect(body.tools).toEqual(tools);
     expect(events).toEqual([
+      { type: 'thinking' },
       { type: 'text', text: 'Let me look.' },
       {
         type: 'toolCalls',

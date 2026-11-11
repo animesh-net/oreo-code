@@ -75,10 +75,11 @@ export const WORKSPACE_TOOLS: FunctionTool[] = [
     type: 'function',
     function: {
       name: 'search',
-      description: 'Search the text of every file in the open repository (case-insensitive). Returns path:line: text.',
+      description:
+        'Search every file in the open repository, case-insensitively, for plain text or a JavaScript regular expression such as "TODO|FIXME". Returns path:line: text.',
       parameters: {
         type: 'object',
-        properties: { query: { type: 'string', description: 'Text to find' } },
+        properties: { query: { type: 'string', description: 'Text or a regular expression to find' } },
         required: ['query'],
       },
     },
@@ -146,6 +147,14 @@ export async function runWorkspaceTool(ws: Workspace, call: ToolCall): Promise<T
       const query = str('query').trim();
       if (!query) return { summary: 'Search (empty)', content: 'Error: query is empty.' };
       const needle = query.toLowerCase();
+      // Models often send a regular expression; a query that isn't valid as one is plain text.
+      let pattern: RegExp | undefined;
+      try {
+        pattern = new RegExp(query, 'i');
+      } catch {
+        pattern = undefined;
+      }
+      const hit = (line: string) => line.toLowerCase().includes(needle) || (pattern?.test(line) ?? false);
       const matches: string[] = [];
       for (const path of await ws.listFiles()) {
         if (isSecretPath(path)) continue;
@@ -153,8 +162,7 @@ export async function runWorkspaceTool(ws: Workspace, call: ToolCall): Promise<T
         if (!text || text.length > MAX_SEARCH_FILE_CHARS || text.includes('\0')) continue;
         const lines = text.split('\n');
         for (let i = 0; i < lines.length && matches.length < MAX_MATCHES; i++) {
-          if (lines[i].toLowerCase().includes(needle))
-            matches.push(`${path}:${i + 1}: ${lines[i].trim().slice(0, 200)}`);
+          if (hit(lines[i])) matches.push(`${path}:${i + 1}: ${lines[i].trim().slice(0, 200)}`);
         }
         if (matches.length >= MAX_MATCHES) break;
       }

@@ -87,6 +87,8 @@ export type ToWebview =
   | { type: 'delta'; text: string }
   /** A tool ran while the reply is being written. */
   | { type: 'activity'; text: string }
+  /** The model is thinking before it writes (cleared by the next text). */
+  | { type: 'thinking' }
   /** A turn failed: show the error and put the user's text back in the input. */
   | { type: 'failed'; message: string; draft: string };
 

@@ -46,6 +46,35 @@ export interface ChatControllerDeps {
  * A turn is kept only if it finished or you stopped it; a failed turn is
  * removed and its text goes back into the input box.
  */
+export const EMPTY_REPLY = 'Oreo Code finished without an answer. Try again, or turn Thinking off.';
+
+/**
+ * The models run with a 32K-token context (oreo-ai's Modelfiles) and Ollama cuts a
+ * longer prompt without saying so. At roughly 3 characters a token for code, the
+ * prompt is kept under this, leaving room for the reply.
+ */
+export const MAX_PROMPT_CHARS = 72_000;
+const REMOVED = '(Removed to fit the context window.)';
+
+/**
+ * Shrinks the prompt in place until it fits: first the oldest earlier turns go (the
+ * system prompt and the current question stay), then the oldest tool results are
+ * replaced by a note. Returns the question's new index.
+ */
+export function fitToContext(wire: WireMessage[], question: number, max = MAX_PROMPT_CHARS): number {
+  const size = () => wire.reduce((n, m) => n + m.content.length, 0);
+  // Earlier turns sit between the system prompt (0) and the current question.
+  while (size() > max && question > 1) {
+    wire.splice(1, 1);
+    question--;
+  }
+  for (const m of wire) {
+    if (size() <= max) break;
+    if (m.role === 'tool' && m.content !== REMOVED) m.content = REMOVED;
+  }
+  return question;
+}
+
 /** Tool rounds per reply; the last round gets no tools, so the model must answer. */
 export const MAX_TOOL_ROUNDS = 8;
 
@@ -209,13 +238,21 @@ export class ChatController {
         { role: 'system', content: await buildSystemPrompt(workspace, !!tools) },
         ...history.map((m) => ({ role: m.role, content: m.content })),
       ];
+      let question = wire.length - 1;
       for (let round = 1; round <= MAX_TOOL_ROUNDS; round++) {
         let text = '';
         let calls: ToolCall[] | undefined;
         const offered = tools && round < MAX_TOOL_ROUNDS ? tools : undefined;
+        let thinking = false;
+        question = fitToContext(wire, question);
         for await (const event of client.streamChat(model, wire, abort.signal, this.effort, offered)) {
           if (event.type === 'toolCalls') {
             calls = event.calls;
+            continue;
+          }
+          if (event.type === 'thinking') {
+            if (!thinking) this.deps.post({ type: 'thinking' });
+            thinking = true;
             continue;
           }
           // A new round's text starts on its own paragraph.
@@ -232,6 +269,18 @@ export class ChatController {
           this.deps.post({ type: 'activity', text: result.summary });
           wire.push({ role: 'tool', tool_call_id: call.id, content: result.content });
         }
+      }
+      // A thinking model sometimes ends a round after tools with no answer at all. Ask
+      // once more, without tools or thinking; if that is empty too, it's a failure.
+      if (!reply.trim()) {
+        wire.push({ role: 'user', content: 'Using what you found, answer my question now.' });
+        fitToContext(wire, question);
+        for await (const event of client.streamChat(model, wire, abort.signal, 'none')) {
+          if (event.type !== 'text') continue;
+          reply += event.text;
+          this.deps.post({ type: 'delta', text: event.text });
+        }
+        if (!reply.trim()) throw new Error(EMPTY_REPLY);
       }
       finish();
     } catch (err) {
