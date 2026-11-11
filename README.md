@@ -27,7 +27,7 @@ Part of the Oreo stack: [oreo-ai](https://github.com/animesh-net/oreo-ai) · [or
 
 - macOS with VS Code and [Ollama](https://ollama.com)
 - [oreo-ai](https://github.com/animesh-net/oreo-ai) cloned to `~/oreo-ai` (for the Modelfiles)
-- GitHub CLI signed in with access to this private repo
+- GitHub CLI signed in (used for installing and self-updating releases; self-update can use the `Oreo Code: Set GitHub token` token instead)
 - Tailscale, for the Cloudflare models
 
 1. Create the Mac models:
