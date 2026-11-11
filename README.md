@@ -13,7 +13,7 @@ Everything runs on the Mac, inside this extension: it calls Ollama directly, wit
 | M5        | Agent loop, approval cards, local session history                  | Next         |
 | M6        | Local workspace tools (unsaved files, diff-view edits, build/test) | Planned      |
 
-The extension offers two models, fixed in `src/ollama/models.ts`: **Oreo 4B** (`oreo-4b`, can use tools) and **Oreo 2B** (`oreo-2b`). The dropdown switches between them, greys out any model Ollama doesn't have (matched as `oreo-4b` or `oreo-4b:latest`), and remembers your last pick.
+The extension offers two models, fixed in `src/ollama/models.ts`: **Oreo 4B** (`oreo-4b`, can use tools) and **Oreo 2B** (`oreo-2b`). The pill in the message box switches between them, greys out any model Ollama doesn't have (matched as `oreo-4b` or `oreo-4b:latest`), and remembers your last pick.
 
 Chat uses Ollama's own endpoints: `GET <oreo.ollamaUrl>/api/tags` to see which models are installed, and the OpenAI-compatible `POST <oreo.ollamaUrl>/v1/chat/completions`, streamed over SSE. The extension host makes these calls, not the webview.
 
@@ -39,7 +39,7 @@ For the latest version-tagged release instead, drop the first line and `$tag`. `
    ```
 
 2. Point `oreo.ollamaUrl` at Ollama. The default, `http://127.0.0.1:11434`, works when Ollama listens on localhost. If it listens only on the Mac's Tailscale address, set `oreo.ollamaUrl` to `http://<tailscale ip>:11434`, or start Ollama with `OLLAMA_HOST=0.0.0.0` so it also answers on localhost. Changing the setting reloads the model list.
-3. Open the **Oreo** view in the activity bar, pick a model and how much it may think, and chat. The **Thinking** dropdown (off, low, medium, high) is sent with every message as `reasoning_effort`; it starts off, because the models are small and slow to think on the M1, and remembers your pick. `none` turns thinking off. **Stop** keeps the partial reply; a failed reply is discarded and your text goes back into the box.
+3. Open the **Oreo** view in the activity bar, and chat. As in the Claude app, the message box has the text on top and, below it, a pill showing the model and whether it thinks (for example **Oreo 4B Thinking off**) and a round Send button. The pill opens one menu for the model and for **Thinking**, which offers only what the model takes: both models are qwen3.5, which can only think or not, so it shows **Off** and **On** (each model's style is set once in `src/ollama/models.ts`). The pick is sent with every message as `reasoning_effort`: `none` for Off, and the remembered level for On (medium the first time), which Ollama turns into thinking on. It starts off, because the models are small and slow to think on the M1, and remembers your pick. **Stop** keeps the partial reply; a failed reply is discarded and your text goes back into the box.
 
 If Ollama isn't running, the view says so in one line and offers **Retry**.
 

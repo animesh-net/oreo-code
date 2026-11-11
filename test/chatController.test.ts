@@ -5,9 +5,9 @@ import { OllamaHttpError } from '../src/ollama/errors';
 import type { ChatMessage, ModelInfo, ToWebview } from '../src/shared/protocol';
 
 const models: ModelInfo[] = [
-  { id: 'oreo-4b', name: 'Oreo 4B', provider: 'macbook', supportsTools: true, available: true },
-  { id: 'oreo-2b', name: 'Oreo 2B', provider: 'macbook', supportsTools: false, available: true },
-  { id: 'oreo-9b', name: 'Oreo 9B', provider: 'macbook', supportsTools: false, available: false },
+  { id: 'oreo-4b', name: 'Oreo 4B', provider: 'macbook', supportsTools: true, thinking: 'switch', available: true },
+  { id: 'oreo-2b', name: 'Oreo 2B', provider: 'macbook', supportsTools: false, thinking: 'switch', available: true },
+  { id: 'oreo-9b', name: 'Oreo 9B', provider: 'macbook', supportsTools: false, thinking: 'switch', available: false },
 ];
 
 const efforts: string[] = [];

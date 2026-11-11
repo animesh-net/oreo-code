@@ -59,18 +59,6 @@ textarea:focus {
   flex-direction: column;
   height: 100%;
 }
-.chat header {
-  display: flex;
-  gap: 6px;
-  padding: 8px;
-  border-bottom: 1px solid var(--vscode-panel-border);
-}
-.chat header select {
-  flex: 1;
-  min-width: 0;
-  padding: 2px 4px;
-}
-
 .messages {
   flex: 1;
   overflow-y: auto;
@@ -109,15 +97,153 @@ textarea:focus {
   border-top: 1px solid var(--vscode-panel-border);
 }
 
-.chat footer {
+/* The message box, like the Claude app: text on top, the model pill and Send below. */
+.composer {
   display: flex;
+  flex-direction: column;
   gap: 6px;
-  align-items: flex-end;
+  margin: 8px;
   padding: 8px;
-  border-top: 1px solid var(--vscode-panel-border);
+  background: var(--vscode-input-background);
+  border: 1px solid var(--vscode-input-border, var(--vscode-panel-border));
+  border-radius: 14px;
 }
-.chat footer textarea {
+.composer:focus-within {
+  border-color: var(--vscode-focusBorder);
+}
+.composer textarea {
+  background: transparent;
+  border: none;
+  outline: none;
+  resize: none;
+  max-height: 40vh;
+  padding: 2px 4px;
+}
+.composer textarea:focus {
+  outline: none;
+}
+.composer-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.anchor {
+  position: relative;
+  min-width: 0;
+}
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  height: 28px;
+  padding: 0 12px;
+  border-radius: 999px;
+  color: var(--vscode-button-secondaryForeground);
+  background: var(--vscode-button-secondaryBackground);
+}
+.pill:hover:not(:disabled) {
+  background: var(--vscode-button-secondaryHoverBackground, var(--vscode-button-secondaryBackground));
+}
+.pill-model {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pill-effort {
+  opacity: 0.7;
+  white-space: nowrap;
+}
+.round {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  margin-left: auto;
+  padding: 0;
+  border-radius: 50%;
+}
+.round svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.round.stop {
+  color: var(--vscode-button-secondaryForeground);
+  background: var(--vscode-button-secondaryBackground);
+}
+.round.stop svg {
+  fill: currentColor;
+  stroke: none;
+}
+
+/* The pill's menu opens above it. */
+.menu {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  z-index: 10;
+  min-width: 190px;
+  padding: 4px;
+  background: var(--vscode-menu-background, var(--vscode-editorWidget-background));
+  color: var(--vscode-menu-foreground, var(--vscode-foreground));
+  border: 1px solid var(--vscode-menu-border, var(--vscode-widget-border, var(--vscode-panel-border)));
+  border-radius: 8px;
+  box-shadow: 0 2px 8px var(--vscode-widget-shadow, rgb(0 0 0 / 0.3));
+}
+.menu-heading {
+  margin: 4px 8px 2px;
+  font-size: 0.85em;
+  color: var(--vscode-descriptionForeground);
+}
+.menu-item {
+  display: flex;
+  width: 100%;
+  padding: 5px 8px;
+  border-radius: 4px;
+  text-align: left;
+  color: inherit;
+  background: none;
+}
+.menu-item:hover:not(:disabled) {
+  color: var(--vscode-menu-selectionForeground, inherit);
+  background: var(--vscode-menu-selectionBackground, var(--vscode-list-hoverBackground));
+}
+.menu-item[aria-checked='true']::after {
+  content: '\2713';
+  margin-left: auto;
+  padding-left: 12px;
+}
+.effort {
+  display: flex;
+  gap: 4px;
+  padding: 2px 4px 4px;
+}
+.effort button {
   flex: 1;
-  resize: vertical;
-  padding: 4px 6px;
+  border-radius: 999px;
+  color: var(--vscode-button-secondaryForeground);
+  background: var(--vscode-button-secondaryBackground);
+}
+.effort button[aria-pressed='true'] {
+  color: var(--vscode-button-foreground);
+  background: var(--vscode-button-background);
+}
+
+/* Covers the view while the menu is open, so a click elsewhere closes it. */
+.dismiss {
+  position: fixed;
+  inset: 0;
+  z-index: 5;
+  padding: 0;
+  background: transparent;
+}
+.dismiss:hover:not(:disabled) {
+  background: transparent;
 }
