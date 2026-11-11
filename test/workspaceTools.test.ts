@@ -69,6 +69,12 @@ describe('workspace tools', () => {
     expect((await runWorkspaceTool(workspace(), call('search', { query: 'SECRET' }))).content).toBe('No matches.');
   });
 
+  it('takes a regular expression too, and a query that is not one as plain text', async () => {
+    const r = await runWorkspaceTool(workspace(), call('search', { query: 'const x|import \\{' }));
+    expect(r.content.split('\n')).toEqual(['src/a.ts:1: const x = 1;', 'src/b.ts:1: import { hello } from "./a";']);
+    expect((await runWorkspaceTool(workspace(), call('search', { query: 'hello(' }))).content).toContain('src/b.ts:2');
+  });
+
   it('answers bad arguments and unknown tools with an error message', async () => {
     const bad: ToolCall = { id: 'c', type: 'function', function: { name: 'read_file', arguments: '{oops' } };
     expect((await runWorkspaceTool(workspace(), bad)).content).toMatch(/not valid JSON/);

@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { ChatController, MAX_TOOL_ROUNDS, pickModel, type ChatControllerDeps } from '../src/chat/chatController';
+import {
+  ChatController,
+  EMPTY_REPLY,
+  fitToContext,
+  MAX_TOOL_ROUNDS,
+  pickModel,
+  type ChatControllerDeps,
+} from '../src/chat/chatController';
 import type { Workspace } from '../src/agent/workspaceTools';
 import type { FunctionTool, ModelClient, StreamEvent, WireMessage } from '../src/ollama/client';
 import { OllamaHttpError } from '../src/ollama/errors';
@@ -399,5 +406,74 @@ describe('repo context and tools', () => {
     expect(requests).toHaveLength(MAX_TOOL_ROUNDS);
     expect(requests.at(-1)?.tools).toBeUndefined();
     expect(controller.state.messages.at(-1)?.content).toBe('done');
+  });
+});
+
+describe('empty replies, thinking and the context window', () => {
+  const ws: Workspace = {
+    name: 'r',
+    listFiles: async () => ['a.ts'],
+    readFile: async () => 'x',
+    branch: async () => undefined,
+    activeFile: () => undefined,
+  };
+
+  function scriptedClient(rounds: (n: number, effort: string) => StreamEvent[]) {
+    const efforts: string[] = [];
+    const client: ModelClient = {
+      listModels: async () => models,
+      async *streamChat(_m, _msgs, _s, effort) {
+        efforts.push(effort);
+        for (const e of rounds(efforts.length, effort)) yield e;
+      },
+    };
+    return { client, efforts };
+  }
+
+  it('asks once more, without thinking, when a reply ends empty', async () => {
+    const { client, efforts } = scriptedClient((n) =>
+      n === 1 ? [{ type: 'thinking' }] : [{ type: 'text', text: 'Found it.' }],
+    );
+    const { controller, posted } = setup(client, { getWorkspace: () => ws, getEffort: () => 'medium' });
+    await controller.refresh();
+    await controller.handle({ type: 'send', text: 'bugs?' });
+    expect(efforts).toEqual(['medium', 'none']);
+    expect(posted).toContainEqual({ type: 'thinking' });
+    expect(controller.state.messages.at(-1)).toEqual({ role: 'assistant', content: 'Found it.' });
+  });
+
+  it('fails the turn and gives the text back when the reply is still empty', async () => {
+    const { client } = scriptedClient(() => []);
+    const { controller, posted } = setup(client, { getWorkspace: () => ws });
+    await controller.refresh();
+    await controller.handle({ type: 'send', text: 'bugs?' });
+    expect(controller.state.messages).toEqual([]);
+    expect(controller.state.error).toBe(EMPTY_REPLY);
+    expect(posted).toContainEqual({ type: 'failed', message: EMPTY_REPLY, draft: 'bugs?' });
+  });
+
+  it('drops the oldest turns, then old tool results, but keeps the system prompt and the question', () => {
+    const wire: WireMessage[] = [
+      { role: 'system', content: 's'.repeat(10) },
+      { role: 'user', content: 'old'.repeat(10) },
+      { role: 'assistant', content: 'old answer'.repeat(10) },
+      { role: 'user', content: 'q' },
+      { role: 'assistant', content: '', tool_calls: [] },
+      { role: 'tool', tool_call_id: 'c', content: 't'.repeat(100) },
+    ];
+    const question = fitToContext(wire, 3, 60);
+    expect(question).toBe(1);
+    expect(wire.map((m) => m.role)).toEqual(['system', 'user', 'assistant', 'tool']);
+    expect(wire[1].content).toBe('q');
+    expect(wire[3].content).toBe('(Removed to fit the context window.)');
+  });
+
+  it('leaves a prompt that fits alone', () => {
+    const wire: WireMessage[] = [
+      { role: 'system', content: 's' },
+      { role: 'user', content: 'q' },
+    ];
+    expect(fitToContext(wire, 1)).toBe(1);
+    expect(wire).toHaveLength(2);
   });
 });

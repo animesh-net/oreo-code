@@ -21,8 +21,9 @@ export interface FunctionTool {
   function: { name: string; description: string; parameters: Record<string, unknown> };
 }
 
-/** Text as it streams, then any tool calls the model made, once complete. */
-export type StreamEvent = { type: 'text'; text: string } | { type: 'toolCalls'; calls: ToolCall[] };
+/** Text as it streams, a sign the model is thinking, then any tool calls once complete. */
+export type StreamEvent =
+  { type: 'text'; text: string } | { type: 'thinking' } | { type: 'toolCalls'; calls: ToolCall[] };
 
 /** What the chat controller needs from Ollama. */
 export interface ModelClient {
@@ -92,6 +93,9 @@ export class OllamaClient implements ModelClient {
     const calls: ToolCall[] = [];
     for await (const chunk of stream) {
       const delta = chunk.choices[0]?.delta;
+      // Ollama's /v1 streams a thinking model's reasoning as delta.reasoning; only its
+      // presence is passed on, so the view can say the model is thinking.
+      if ((delta as { reasoning?: unknown } | undefined)?.reasoning) yield { type: 'thinking' };
       if (delta?.content) yield { type: 'text', text: delta.content };
       for (const part of delta?.tool_calls ?? []) {
         const call = (calls[part.index] ??= {

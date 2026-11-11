@@ -28,6 +28,7 @@ function App() {
   const [state, setState] = useState<ViewState>(emptyState);
   const [streaming, setStreaming] = useState('');
   const [activity, setActivity] = useState<string[]>([]);
+  const [thinking, setThinking] = useState(false);
   const [draft, setDraft] = useState(saved.draft ?? '');
   const [menuOpen, setMenuOpen] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
@@ -41,13 +42,19 @@ function App() {
           if (!msg.state.busy) {
             setStreaming('');
             setActivity([]);
+            setThinking(false);
           }
           break;
         case 'delta':
+          setThinking(false);
           setStreaming((s) => s + msg.text);
           break;
         case 'activity':
+          setThinking(false);
           setActivity((a) => [...a, msg.text]);
+          break;
+        case 'thinking':
+          setThinking(true);
           break;
         case 'failed':
           setDraft((d) => (d.trim() ? d : msg.draft));
@@ -85,7 +92,12 @@ function App() {
         {state.messages.map((m, i) => (
           <Bubble key={i} message={m} />
         ))}
-        {state.busy && <Bubble message={{ role: 'assistant', content: streaming, activity }} pending />}
+        {state.busy && (
+          <Bubble
+            message={{ role: 'assistant', content: streaming, activity }}
+            pending={thinking ? 'Thinking…' : '…'}
+          />
+        )}
       </div>
 
       {state.error && (
@@ -186,7 +198,7 @@ function App() {
   );
 }
 
-function Bubble({ message, pending }: { message: ChatMessage; pending?: boolean }) {
+function Bubble({ message, pending }: { message: ChatMessage; pending?: string }) {
   return (
     <div class={`bubble ${message.role}`}>
       <div class="role">{message.role === 'user' ? 'You' : 'Oreo Code'}</div>
@@ -198,7 +210,7 @@ function Bubble({ message, pending }: { message: ChatMessage; pending?: boolean 
         </ul>
       )}
       {/* Rendered as plain text on purpose: model output is untrusted. */}
-      <div class="content">{message.content || (pending ? '…' : '')}</div>
+      <div class="content">{message.content || pending || ''}</div>
     </div>
   );
 }
