@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  describeError,
   downloadRelease,
   findUpdate,
   findUpdateWithTokens,
@@ -92,5 +93,16 @@ describe('findUpdateWithTokens', () => {
   it('says how to add a token when there is none, and passes on a refusal when all are refused', async () => {
     await expect(findUpdateWithTokens('0.2.0', [async () => undefined], byToken('x'))).rejects.toThrow(/gh auth login/);
     await expect(findUpdateWithTokens('0.2.0', [async () => 'a'], byToken('x'))).rejects.toThrow(/Contents \(read\)/);
+  });
+});
+
+describe('describeError', () => {
+  it('words errors, bare strings and other values', () => {
+    expect(describeError(new Error('boom'))).toBe('boom');
+    expect(describeError('Cannot install')).toBe('Cannot install');
+    expect(describeError({ message: 'from an object' })).toBe('from an object');
+    expect(describeError({ code: 7 })).toBe('{"code":7}');
+    expect(describeError(undefined)).toBe('undefined');
+    expect(describeError(Object.assign(new Error(''), { name: 'Canceled' }))).toBe('Canceled');
   });
 });
