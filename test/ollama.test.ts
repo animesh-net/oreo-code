@@ -1,6 +1,6 @@
 import { APIConnectionError, APIConnectionTimeoutError, APIError } from 'openai';
 import { describe, expect, it } from 'vitest';
-import { FIRST_TOKEN_TIMEOUT_MS, OllamaClient } from '../src/ollama/client';
+import { FIRST_TOKEN_TIMEOUT_MS, MAX_OUTPUT_TOKENS, OllamaClient } from '../src/ollama/client';
 import { describeOllamaError, OllamaHttpError } from '../src/ollama/errors';
 import { modelsFromTags, OREO_MODELS } from '../src/ollama/models';
 
@@ -24,9 +24,9 @@ function sseResponse(chunks: string[]): Response {
 describe('OREO_MODELS', () => {
   it('offers two models on the Mac and two on Workers AI, the Mac first', () => {
     expect(OREO_MODELS.map((m) => [m.id, m.provider, m.supportsTools, m.thinking, m.maxPromptChars])).toEqual([
-      ['oreo-4b', 'macbook', true, 'switch', 72_000],
-      ['oreo-2b', 'macbook', false, 'switch', 72_000],
-      ['@cf/qwen/qwen3-30b-a3b-fp8', 'cloudflare', true, 'switch', 72_000],
+      ['oreo-4b', 'macbook', true, 'switch', 66_000],
+      ['oreo-2b', 'macbook', false, 'switch', 66_000],
+      ['@cf/qwen/qwen3-30b-a3b-fp8', 'cloudflare', true, 'switch', 66_000],
       ['@cf/openai/gpt-oss-120b', 'cloudflare', true, 'levels', 200_000],
     ]);
   });
@@ -110,6 +110,7 @@ describe('OllamaClient', () => {
       messages: [{ role: 'user', content: 'hi' }],
       stream: true,
       reasoning_effort: 'none',
+      max_tokens: MAX_OUTPUT_TOKENS,
     });
   });
 
@@ -120,7 +121,7 @@ describe('OllamaClient', () => {
       (['none', 'low', 'medium', 'high'] as const).map((e) => [m.id, e] as const),
     ),
   )('sends %s the effort %s as reasoning_effort', async (model, effort) => {
-    let body: { model?: string; reasoning_effort?: string } = {};
+    let body: { model?: string; reasoning_effort?: string; max_tokens?: number } = {};
     const client = new OllamaClient(ollama, async (_input, init) => {
       body = JSON.parse(String(init?.body));
       return sseResponse(['ok']);
@@ -133,7 +134,11 @@ describe('OllamaClient', () => {
     )) {
       // drain
     }
-    expect(body).toMatchObject({ model, reasoning_effort: effort });
+    expect(body).toMatchObject({
+      model,
+      reasoning_effort: effort,
+      max_tokens: effort === 'none' ? MAX_OUTPUT_TOKENS : MAX_OUTPUT_TOKENS * 2,
+    });
   });
 });
 

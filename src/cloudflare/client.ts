@@ -1,6 +1,7 @@
 import OpenAI from 'openai';
 import {
   FIRST_TOKEN_TIMEOUT_MS,
+  MAX_OUTPUT_TOKENS,
   readEvents,
   type FunctionTool,
   type ModelClient,
@@ -13,8 +14,7 @@ import type { ModelInfo, ReasoningEffort } from '../shared/protocol';
 
 type FetchLike = typeof fetch;
 
-/** Room for the answer; doubled for a model that reasons first, as in oreo-ai. */
-export const MAX_OUTPUT_TOKENS = 4096;
+export { MAX_OUTPUT_TOKENS };
 
 /** How long the model list may take; over Tailscale a missing route otherwise hangs. */
 export const LIST_TIMEOUT_MS = 10_000;
