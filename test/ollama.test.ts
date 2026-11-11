@@ -1,6 +1,6 @@
-import { APIConnectionError, APIError } from 'openai';
+import { APIConnectionError, APIConnectionTimeoutError, APIError } from 'openai';
 import { describe, expect, it } from 'vitest';
-import { OllamaClient } from '../src/ollama/client';
+import { FIRST_TOKEN_TIMEOUT_MS, OllamaClient } from '../src/ollama/client';
 import { describeOllamaError, OllamaHttpError } from '../src/ollama/errors';
 import { modelsFromTags, OREO_MODELS } from '../src/ollama/models';
 
@@ -168,6 +168,16 @@ describe('tool calls', () => {
 });
 
 describe('describeOllamaError', () => {
+  it('says Ollama was slow to start, not unreachable, on a timeout', () => {
+    expect(describeOllamaError(new APIConnectionTimeoutError(), ollama)).toMatch(
+      /didn't start answering within 10 minutes/,
+    );
+  });
+
+  it('allows 10 minutes for the first token', () => {
+    expect(FIRST_TOKEN_TIMEOUT_MS).toBe(600_000);
+  });
+
   it('asks whether Ollama is running when it is unreachable', () => {
     expect(describeOllamaError(new APIConnectionError({ message: 'x' }), ollama)).toBe(
       `Can't reach Ollama at ${ollama}. Is it running?`,

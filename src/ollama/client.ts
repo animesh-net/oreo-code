@@ -39,6 +39,8 @@ export interface ModelClient {
 
 type FetchLike = typeof fetch;
 
+export const FIRST_TOKEN_TIMEOUT_MS = 10 * 60_000;
+
 /**
  * Talks to Ollama on this Mac (or wherever "oreo.ollamaUrl" points):
  *  - GET  {ollama}/api/tags               -> which Oreo models are installed
@@ -57,7 +59,10 @@ export class OllamaClient implements ModelClient {
       apiKey: 'ollama',
       fetch: fetchImpl,
       maxRetries: 0,
-      timeout: 120_000,
+      // How long Ollama may take to start answering. On an 8 GB M1, loading the model and
+      // reading a long prompt (repo snapshot, file contents) can take minutes; a reply
+      // that has started streaming is never cut off by this.
+      timeout: FIRST_TOKEN_TIMEOUT_MS,
     });
   }
 
