@@ -87,7 +87,7 @@ describe('system prompt', () => {
     const prompt = await buildSystemPrompt(workspace({ path: 'src/a.ts', text: 'OPEN TEXT', selection: 'SEL' }), true);
     expect(prompt).toContain('repository "demo" on branch main');
     expect(prompt).toContain('Files (4; ignored folders left out):\n.env\nREADME.md\nsrc/a.ts\nsrc/b.ts');
-    expect(prompt).toContain('Open in the editor: src/a.ts');
+    expect(prompt).toContain('Open in the editor (for reference; explain it only if asked): src/a.ts');
     expect(prompt).toContain('OPEN TEXT');
     expect(prompt).toContain('SEL');
     expect(prompt).toContain('read_file');
@@ -106,6 +106,23 @@ describe('system prompt', () => {
       expect(prompt).toContain('Finding no bugs is a good answer.');
     }
     expect(await buildSystemPrompt(workspace(), true)).toContain('read its callers');
+  });
+
+  it('puts the answer rules before the snapshot and the reminder after it', async () => {
+    const prompt = await buildSystemPrompt(workspace({ path: 'src/a.ts', text: 'OPEN TEXT' }), true);
+    const rules = prompt.indexOf("Answer only the user's latest message.");
+    expect(rules).toBeGreaterThan(-1);
+    expect(rules).toBeLessThan(prompt.indexOf('Files ('));
+    expect(prompt).toContain('Never repeat an earlier answer');
+    expect(prompt).toContain('Be brief.');
+    expect(prompt.endsWith("The files above are reference only. Answer the user's latest message, briefly.")).toBe(
+      true,
+    );
+    expect(prompt.indexOf('OPEN TEXT')).toBeLessThan(prompt.lastIndexOf('reference only'));
+  });
+
+  it('gives the answer rules even with no folder open', async () => {
+    expect(await buildSystemPrompt(undefined, false)).toContain("Answer only the user's latest message.");
   });
 
   it('says when no folder is open', async () => {

@@ -58,9 +58,10 @@ export const EMPTY_REPLY = 'Oreo Code finished without an answer. Try again, or 
 /**
  * The models run with a 32K-token context (oreo-ai's Modelfiles) and Ollama cuts a
  * longer prompt without saying so. At roughly 3 characters a token for code, the
- * prompt is kept under this, leaving room for the reply.
+ * prompt is kept under this (about 22K tokens), leaving 8K for a thinking reply
+ * (MAX_OUTPUT_TOKENS * 2) and the rest for the tool definitions and chat template.
  */
-export const MAX_PROMPT_CHARS = 72_000;
+export const MAX_PROMPT_CHARS = 66_000;
 const REMOVED = '(Removed to fit the context window.)';
 
 /**
@@ -80,6 +81,28 @@ export function fitToContext(wire: WireMessage[], question: number, max = MAX_PR
     if (m.role === 'tool' && m.content !== REMOVED) m.content = REMOVED;
   }
   return question;
+}
+
+/** How much of each earlier answer goes back to the model; the latest goes back whole. */
+export const MAX_EARLIER_REPLY_CHARS = 1_500;
+const SHORTENED = '\n… (earlier answer shortened)';
+
+/**
+ * The conversation as sent to the model. Answers before the latest one are cut short,
+ * so a small model sees what was said without copying long earlier replies again.
+ */
+export function historyToWire(history: ChatMessage[]): WireMessage[] {
+  let latest = -1;
+  history.forEach((m, i) => {
+    if (m.role === 'assistant') latest = i;
+  });
+  return history.map((m, i) => ({
+    role: m.role,
+    content:
+      m.role === 'assistant' && i !== latest && m.content.length > MAX_EARLIER_REPLY_CHARS
+        ? `${m.content.slice(0, MAX_EARLIER_REPLY_CHARS)}${SHORTENED}`
+        : m.content,
+  }));
 }
 
 /** Tool rounds per reply; the last round gets no tools, so the model must answer. */
@@ -286,7 +309,7 @@ export class ChatController {
       const tools = info?.supportsTools && workspace ? WORKSPACE_TOOLS : undefined;
       const wire: WireMessage[] = [
         { role: 'system', content: await buildSystemPrompt(workspace, !!tools) },
-        ...history.map((m) => ({ role: m.role, content: m.content })),
+        ...historyToWire(history),
       ];
       let question = wire.length - 1;
       for (let round = 1; round <= MAX_TOOL_ROUNDS; round++) {

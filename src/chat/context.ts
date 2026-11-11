@@ -4,12 +4,22 @@ const MAX_TREE = 300;
 const MAX_OPEN_FILE_CHARS = 8_000;
 const MAX_SELECTION_CHARS = 4_000;
 
+/** How to answer, first in the prompt so the repo snapshot can't bury it. */
+const ANSWER_RULES = [
+  'How to answer:',
+  "- Answer only the user's latest message. Earlier messages are context, not questions to answer again.",
+  '- Be brief. Match the length to the question: a short question gets a short answer.',
+  '- Never repeat an earlier answer; refer to it. For a follow-up, give only what is new or changed.',
+  '- No preamble, no recap of the question, no closing summary.',
+  "- The user's instructions on format, length and scope come before these defaults.",
+];
+
 /**
- * The system prompt sent with every message: which repository is open, its files,
- * and the file in the editor. Kept well inside the models' 32K-token context.
+ * The system prompt sent with every message: how to answer, which repository is open,
+ * its files, and the file in the editor. Kept well inside the models' 32K-token context.
  */
 export async function buildSystemPrompt(ws: Workspace | undefined, withTools: boolean): Promise<string> {
-  const lines = ["You are Oreo Code, a coding assistant inside VS Code on the user's Mac."];
+  const lines = ["You are Oreo Code, a coding assistant inside VS Code on the user's Mac.", ...ANSWER_RULES, ''];
   if (!ws) {
     lines.push('No folder is open, so there is no repository to look at. Answer from the conversation.');
     return lines.join('\n');
@@ -45,10 +55,12 @@ export async function buildSystemPrompt(ws: Workspace | undefined, withTools: bo
   if (open && !isSecretPath(open.path)) {
     const text =
       open.text.length > MAX_OPEN_FILE_CHARS ? `${open.text.slice(0, MAX_OPEN_FILE_CHARS)}\n… (cut)` : open.text;
-    lines.push('', `Open in the editor: ${open.path}`, '```', text, '```');
+    lines.push('', `Open in the editor (for reference; explain it only if asked): ${open.path}`, '```', text, '```');
     if (open.selection?.trim()) {
       lines.push('Selected in it:', '```', open.selection.slice(0, MAX_SELECTION_CHARS), '```');
     }
   }
+  // Small models weigh the end of the prompt most; repeat the key rule after the snapshot.
+  lines.push('', "The files above are reference only. Answer the user's latest message, briefly.");
   return lines.join('\n');
 }

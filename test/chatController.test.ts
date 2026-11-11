@@ -3,6 +3,8 @@ import {
   ChatController,
   EMPTY_REPLY,
   fitToContext,
+  historyToWire,
+  MAX_EARLIER_REPLY_CHARS,
   MAX_TOOL_ROUNDS,
   pickModel,
   type ChatControllerDeps,
@@ -499,6 +501,45 @@ describe('empty replies, thinking and the context window', () => {
     expect(wire.map((m) => m.role)).toEqual(['system', 'user', 'assistant', 'tool']);
     expect(wire[1].content).toBe('q');
     expect(wire[3].content).toBe('(Removed to fit the context window.)');
+  });
+
+  it('shortens earlier answers but sends the latest answer and every question whole', () => {
+    const long = (c: string) => c.repeat(MAX_EARLIER_REPLY_CHARS + 500);
+    const wire = historyToWire([
+      { role: 'user', content: long('a') },
+      { role: 'assistant', content: long('b') },
+      { role: 'user', content: 'and?' },
+      { role: 'assistant', content: 'short' },
+      { role: 'user', content: 'more?' },
+      { role: 'assistant', content: long('c') },
+      { role: 'user', content: 'last' },
+    ]);
+    expect(wire.map((m) => m.role)).toEqual(['user', 'assistant', 'user', 'assistant', 'user', 'assistant', 'user']);
+    expect(wire[0].content).toBe(long('a'));
+    expect(wire[1].content).toBe(`${'b'.repeat(MAX_EARLIER_REPLY_CHARS)}\n… (earlier answer shortened)`);
+    expect(wire[3].content).toBe('short');
+    expect(wire[5].content).toBe(long('c'));
+    expect(wire[6].content).toBe('last');
+  });
+
+  it('sends earlier answers shortened with the next question', async () => {
+    const long = 'x'.repeat(MAX_EARLIER_REPLY_CHARS * 2);
+    const seen: ChatMessage[][] = [];
+    const answers = [long, 'second', 'third'];
+    const { controller } = setup(
+      fakeClient(async function* (messages) {
+        seen.push(messages);
+        yield answers[seen.length - 1];
+      }),
+    );
+    await controller.refresh();
+    await controller.handle({ type: 'send', text: 'one' });
+    await controller.handle({ type: 'send', text: 'two' });
+    await controller.handle({ type: 'send', text: 'three' });
+    expect(seen[1][1].content).toBe(long);
+    expect(seen[2][1].content).toHaveLength(MAX_EARLIER_REPLY_CHARS + '\n… (earlier answer shortened)'.length);
+    expect(seen[2].at(-1)).toEqual({ role: 'user', content: 'three' });
+    expect(controller.state.messages[1].content).toBe(long);
   });
 
   it('leaves a prompt that fits alone', () => {

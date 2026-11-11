@@ -16,7 +16,7 @@ export const OREO_MODELS: readonly Omit<ModelInfo, 'available'>[] = [
     provider: 'macbook',
     supportsTools: true,
     thinking: 'switch',
-    maxPromptChars: 72_000,
+    maxPromptChars: 66_000,
   },
   {
     id: 'oreo-2b',
@@ -24,7 +24,7 @@ export const OREO_MODELS: readonly Omit<ModelInfo, 'available'>[] = [
     provider: 'macbook',
     supportsTools: false,
     thinking: 'switch',
-    maxPromptChars: 72_000,
+    maxPromptChars: 66_000,
   },
   // Qwen3 has a 32K context and a thinking switch; gpt-oss 128K and always reasons.
   {
@@ -33,7 +33,7 @@ export const OREO_MODELS: readonly Omit<ModelInfo, 'available'>[] = [
     provider: 'cloudflare',
     supportsTools: true,
     thinking: 'switch',
-    maxPromptChars: 72_000,
+    maxPromptChars: 66_000,
   },
   {
     id: '@cf/openai/gpt-oss-120b',

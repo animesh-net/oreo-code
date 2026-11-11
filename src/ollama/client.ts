@@ -41,6 +41,9 @@ type FetchLike = typeof fetch;
 
 export const FIRST_TOKEN_TIMEOUT_MS = 10 * 60_000;
 
+/** Room for the answer; doubled when the model thinks first, as in oreo-ai. */
+export const MAX_OUTPUT_TOKENS = 4096;
+
 /**
  * Talks to Ollama on this Mac (or wherever "oreo.ollamaUrl" points):
  *  - GET  {ollama}/api/tags               -> which Oreo models are installed
@@ -90,6 +93,9 @@ export class OllamaClient implements ModelClient {
         messages: messages as OpenAI.Chat.ChatCompletionMessageParam[],
         stream: true,
         reasoning_effort: effort,
+        // Without a cap a small model can run on until the context is full, and once
+        // Ollama shifts the context it loses its place and repeats itself.
+        max_tokens: effort === 'none' ? MAX_OUTPUT_TOKENS : MAX_OUTPUT_TOKENS * 2,
         ...(tools?.length ? { tools } : {}),
       },
       { signal },
