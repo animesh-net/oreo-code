@@ -100,7 +100,7 @@
         "oreo.cloudUrl": {
           "type": "string",
           "default": "https://ai.animesh.org.in/v1",
-          "markdownDescription": "oreo-ai's Workers AI relay on the Pi, reachable over Tailscale only, for the Cloudflare models (Qwen3 30B, gpt-oss 120B). oreo-ai holds the Cloudflare token; what you send these models leaves the Mac. Leave empty to turn the Cloudflare models off."
+          "markdownDescription": "oreo-ai's Workers AI relay on the Pi, reachable over Tailscale only, for the Cloudflare models (Oreo 30B, Oreo 120B). oreo-ai holds the Cloudflare token; what you send these models leaves the Mac. Leave empty to turn the Cloudflare models off."
         }
       }
     }

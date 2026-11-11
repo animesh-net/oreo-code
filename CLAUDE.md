@@ -147,7 +147,7 @@ stdio (now), then an agent loop with approval cards, and local workspace tools.
   No Cloudflare token or account id anywhere in the extension: oreo-ai's relay on
   the Pi holds the token, and network access over Tailscale is the access control.
 - **Models are named once** in `src/ollama/models.ts` (`OREO_MODELS`); no model id
-  anywhere else and no model editing. Ollama's `GET /api/tags` only marks which
+  anywhere else and no model editing. Display names are `Oreo <size>` (`Oreo 4B`, `Oreo 120B`); a Mac model's id is `oreo-<size>`. Ollama's `GET /api/tags` only marks which
   are installed. The extension only offers a dropdown; agent mode uses only
   models with `supportsTools: true`.
 - **Testable core.** `src/chat/`, `src/ollama/`, `src/cloudflare/`, `src/mcp/`, `src/agent/` and `src/update/` have no `vscode` imports; VS
