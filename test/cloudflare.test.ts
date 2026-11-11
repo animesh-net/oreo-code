@@ -1,11 +1,12 @@
 import { APIConnectionError, APIError } from 'openai';
 import { describe, expect, it } from 'vitest';
 import { CloudflareClient, MAX_OUTPUT_TOKENS, thinkFilter } from '../src/cloudflare/client';
-import { describeCloudflareError } from '../src/cloudflare/errors';
+import { describeCloudflareError, RelayHttpError } from '../src/cloudflare/errors';
 import type { StreamEvent } from '../src/ollama/client';
 
 const QWEN = '@cf/qwen/qwen3-30b-a3b-fp8';
 const GPT = '@cf/openai/gpt-oss-120b';
+const RELAY = 'https://ai.animesh.org.in/v1';
 
 function sse(...deltas: unknown[]): Response {
   const body =
@@ -18,7 +19,7 @@ async function run(model: string, effort: 'none' | 'low' | 'medium' | 'high', ..
   let url = '';
   let auth = '';
   let body: Record<string, unknown> = {};
-  const client = new CloudflareClient('acc123', 'cf-token', async (input, init) => {
+  const client = new CloudflareClient(RELAY, async (input, init) => {
     url = String(input);
     auth = new Headers(init?.headers).get('authorization') ?? '';
     body = JSON.parse(String(init?.body));
@@ -40,10 +41,12 @@ async function run(model: string, effort: 'none' | 'low' | 'medium' | 'high', ..
 }
 
 describe('CloudflareClient', () => {
-  it('calls the account’s Workers AI endpoint with the token', async () => {
-    const { url, auth } = await run(QWEN, 'none', { content: 'ok' });
-    expect(url).toBe('https://api.cloudflare.com/client/v4/accounts/acc123/ai/v1/chat/completions');
-    expect(auth).toBe('Bearer cf-token');
+  it("calls oreo-ai's relay with only a placeholder key", async () => {
+    const { url, auth, body } = await run(QWEN, 'none', { content: 'ok' });
+    expect(url).toBe(`${RELAY}/chat/completions`);
+    expect(auth).toBe('Bearer oreo-ai');
+    expect(body.model).toBe(QWEN);
+    expect(body.stream).toBe(true);
   });
 
   it('turns Qwen3 thinking off with /no_think in the system message, and leaves it out for On', async () => {
@@ -81,6 +84,53 @@ describe('CloudflareClient', () => {
   });
 });
 
+describe('CloudflareClient.listModels', () => {
+  function client(respond: () => Response | Promise<Response>) {
+    const urls: string[] = [];
+    const c = new CloudflareClient(RELAY, async (input) => {
+      urls.push(String(input));
+      return respond();
+    });
+    return { c, urls };
+  }
+  const json = (status: number, body: unknown) =>
+    new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+
+  it('marks both cloud models available when the relay lists them', async () => {
+    const { c, urls } = client(() => json(200, { object: 'list', data: [{ id: QWEN }, { id: GPT }] }));
+    const models = await c.listModels();
+    expect(urls).toEqual([`${RELAY}/models`]);
+    expect(models.map((m) => [m.id, m.provider, m.available])).toEqual([
+      [QWEN, 'cloudflare', true],
+      [GPT, 'cloudflare', true],
+    ]);
+  });
+
+  it('marks a model the relay leaves out unavailable, and ignores ids it does not know', async () => {
+    const { c } = client(() => json(200, { object: 'list', data: [{ id: GPT }, { id: '@cf/other/model' }] }));
+    expect((await c.listModels()).map((m) => [m.id, m.available])).toEqual([
+      [QWEN, false],
+      [GPT, true],
+    ]);
+  });
+
+  it("throws the relay's 503 with its message", async () => {
+    const { c } = client(() => json(503, { error: { message: 'Cloudflare is not configured.' } }));
+    const err = await c.listModels().catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(RelayHttpError);
+    expect((err as RelayHttpError).status).toBe(503);
+    expect(describeCloudflareError(err, RELAY)).toMatch(/no Cloudflare set up/);
+  });
+
+  it('words an unreachable relay', async () => {
+    const { c } = client(() => {
+      throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ENOTFOUND' } });
+    });
+    const err = await c.listModels().catch((e: unknown) => e);
+    expect(describeCloudflareError(err, RELAY)).toBe(`Can't reach oreo-ai at ${RELAY}. Is the Mac on Tailscale?`);
+  });
+});
+
 describe('thinkFilter', () => {
   it('passes text with no think block straight through', () => {
     const f = thinkFilter();
@@ -94,11 +144,26 @@ describe('thinkFilter', () => {
 });
 
 describe('describeCloudflareError', () => {
-  it('words a refused token, the daily limit and no network', () => {
-    expect(describeCloudflareError(APIError.generate(401, {}, undefined, new Headers()))).toMatch(
-      /Set Cloudflare token/,
+  const status = (code: number, body: Record<string, unknown> = {}) =>
+    APIError.generate(code, body, undefined, new Headers());
+
+  it('words no route to oreo-ai, the rate limit and a relay without Cloudflare', () => {
+    expect(describeCloudflareError(new APIConnectionError({ message: 'x' }), RELAY)).toBe(
+      `Can't reach oreo-ai at ${RELAY}. Is the Mac on Tailscale?`,
     );
-    expect(describeCloudflareError(APIError.generate(429, {}, undefined, new Headers()))).toMatch(/10,000 Neurons/);
-    expect(describeCloudflareError(new APIConnectionError({ message: 'x' }))).toMatch(/internet connection/);
+    expect(describeCloudflareError(status(429), RELAY)).toMatch(/limit is reached.*Use a Mac model/);
+    expect(describeCloudflareError(status(503), RELAY)).toMatch(/oreo-ai has no Cloudflare set up/);
+  });
+
+  it("passes on the relay's own message for a 400", () => {
+    expect(describeCloudflareError(status(400, { error: { message: 'Model not offered.' } }), RELAY)).toBe(
+      'Model not offered.',
+    );
+  });
+
+  it('never mentions a Cloudflare token', () => {
+    for (const code of [400, 401, 403, 429, 500, 503]) {
+      expect(describeCloudflareError(status(code), RELAY)).not.toMatch(/token/i);
+    }
   });
 });

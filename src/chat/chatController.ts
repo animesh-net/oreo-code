@@ -1,6 +1,7 @@
 import { runWorkspaceTool, WORKSPACE_TOOLS, type Workspace } from '../agent/workspaceTools';
 import type { ModelClient, ToolCall, WireMessage } from '../ollama/client';
 import { buildSystemPrompt } from './context';
+import { cloudModels } from '../cloudflare/client';
 import { describeCloudflareError } from '../cloudflare/errors';
 import { describeOllamaError, isUnreachable } from '../ollama/errors';
 import { OREO_MODELS } from '../ollama/models';
@@ -33,11 +34,10 @@ export interface ChatControllerDeps {
    * localhost): the Mac's Tailscale addresses, where oreo-ai's script binds Ollama.
    */
   fallbackOllamaUrls?(ollamaUrl: string): string[];
-  /**
-   * The Workers AI client, or undefined when no Cloudflare account id and token are
-   * set; the cloud models are then listed but not usable.
-   */
-  getCloudClient?(): Promise<ModelClient | undefined>;
+  /** Raw "oreo.cloudUrl" setting: oreo-ai's Workers AI relay. Empty turns the cloud models off. */
+  getCloudUrl?(): string;
+  /** The relay client for a valid cloud URL; its model list says which cloud models are usable. */
+  createCloudClient?(cloudUrl: string): ModelClient;
   /** The open folder, for the repo snapshot and the read-only tools; none if no folder is open. */
   getWorkspace?(): Workspace | undefined;
   /** Sends a message to the webview (a no-op while the view is closed). */
@@ -89,6 +89,7 @@ export class ChatController {
   private ollamaUrl = '';
   private client: ModelClient | undefined;
   private cloud: ModelClient | undefined;
+  private cloudUrl = '';
   private models: ModelInfo[] = [];
   private selectedModel: string | undefined;
   private messages: ChatMessage[] = [];
@@ -139,22 +140,40 @@ export class ChatController {
   }
 
   /**
-   * Lists the Workers AI models after the Mac's. With a Cloudflare token they can be
-   * used even when Ollama is down; an Ollama problem is then shown only if no model
-   * at all can be picked.
+   * Lists the Workers AI models after the Mac's, usable when oreo-ai's relay lists them.
+   * They work even when Ollama is down, and the Mac's models when the relay is down; a
+   * problem is shown only if no model at all can be picked.
    */
   private async addCloudModels(seq: number, prior: string | undefined): Promise<void> {
-    const cloud = await this.deps.getCloudClient?.();
-    if (seq !== this.refreshSeq) return;
-    this.cloud = cloud;
+    this.cloud = undefined;
+    this.cloudUrl = '';
+    let inCloud = cloudModels();
+    let problem: string | undefined;
+    const raw = this.deps.getCloudUrl?.() ?? '';
+    if (raw.trim() && this.deps.createCloudClient) {
+      try {
+        const url = normalizeOllamaUrl(raw, 'oreo.cloudUrl');
+        const cloud = this.deps.createCloudClient(url);
+        try {
+          inCloud = await cloud.listModels();
+        } catch (err) {
+          problem = describeCloudflareError(err, url);
+        }
+        if (seq !== this.refreshSeq) return;
+        this.cloud = cloud;
+        this.cloudUrl = url;
+      } catch (err) {
+        problem = (err as Error).message;
+      }
+    }
     const mac = this.models.length
       ? this.models
       : OREO_MODELS.filter((m) => m.provider === 'macbook').map((m) => ({ ...m, available: false }));
-    const inCloud = OREO_MODELS.filter((m) => m.provider === 'cloudflare').map((m) => ({ ...m, available: !!cloud }));
     this.models = [...mac, ...inCloud];
     // Picked again from the full list, so a remembered cloud model isn't lost to the Mac's.
     this.selectedModel = pickModel(this.models, prior, this.deps.getLastModel());
     if (this.selectedModel) this.error = undefined;
+    else this.error ??= problem;
   }
 
   /** Looks for Ollama at the fallback addresses; uses the first that answers. */
@@ -321,7 +340,9 @@ export class ChatController {
         else this.messages.splice(turnStart);
       } else {
         this.messages.splice(turnStart);
-        const message = inCloud ? describeCloudflareError(err) : describeOllamaError(err, this.ollamaUrl, model);
+        const message = inCloud
+          ? describeCloudflareError(err, this.cloudUrl)
+          : describeOllamaError(err, this.ollamaUrl, model);
         this.error = message;
         this.deps.post({ type: 'failed', message, draft: text });
       }

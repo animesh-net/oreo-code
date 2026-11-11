@@ -8,7 +8,6 @@ import { McpHost } from './mcp/host';
 import { stdioConnect } from './mcp/stdioConnect';
 import { OllamaClient } from './ollama/client';
 import { tailscaleOllamaUrls } from './ollama/url';
-import { CloudflareTokenStore, validateCloudflareTokenShape } from './auth/cloudflareToken';
 import { ghCliToken } from './auth/ghCliToken';
 import { CloudflareClient } from './cloudflare/client';
 import { downloadRelease, findUpdateWithTokens } from './update/releases';
@@ -30,14 +29,6 @@ export function activate(context: vscode.ExtensionContext): void {
 
   const config = () => vscode.workspace.getConfiguration('oreo');
 
-  // Workers AI: the account id is a setting, the API token sits in the Keychain.
-  const cloudflareTokens = new CloudflareTokenStore(context.secrets);
-  const getCloudClient = async () => {
-    const accountId = config().get<string>('cloudflare.accountId', '').trim();
-    const token = await cloudflareTokens.get();
-    return accountId && token ? new CloudflareClient(accountId, token) : undefined;
-  };
-
   const controller = new ChatController({
     getOllamaUrl: () => config().get<string>('ollamaUrl', ''),
     getLastModel: () => context.globalState.get<string>(LAST_MODEL_KEY),
@@ -47,7 +38,9 @@ export function activate(context: vscode.ExtensionContext): void {
     createClient: (ollamaUrl) => new OllamaClient(ollamaUrl),
     fallbackOllamaUrls: (ollamaUrl) => tailscaleOllamaUrls(ollamaUrl, os.networkInterfaces()),
     getWorkspace: currentWorkspace,
-    getCloudClient,
+    // Workers AI through oreo-ai's relay on the Pi, over Tailscale; it holds the Cloudflare token.
+    getCloudUrl: () => config().get<string>('cloudUrl', ''),
+    createCloudClient: (cloudUrl) => new CloudflareClient(cloudUrl),
     post: (message) => view.post(message),
     onState: (state) => updateStatus(status, state),
   });
@@ -160,39 +153,10 @@ export function activate(context: vscode.ExtensionContext): void {
       void vscode.window.showInformationMessage('GitHub token removed.');
     }),
     vscode.commands.registerCommand('oreo.showGithubTools', showGithubTools),
-    vscode.commands.registerCommand('oreo.setCloudflareToken', async () => {
-      if (!config().get<string>('cloudflare.accountId', '').trim()) {
-        const accountId = await vscode.window.showInputBox({
-          title: 'Oreo Code: Cloudflare account id',
-          prompt: 'Your Cloudflare account id (on the Workers AI page of the dashboard).',
-          ignoreFocusOut: true,
-          validateInput: (v) =>
-            /^[0-9a-f]{32}$/i.test(v.trim()) ? undefined : 'An account id is 32 hexadecimal characters.',
-        });
-        if (!accountId) return;
-        await config().update('cloudflare.accountId', accountId.trim(), vscode.ConfigurationTarget.Global);
-      }
-      const token = await vscode.window.showInputBox({
-        title: 'Oreo Code: Set Cloudflare token',
-        prompt:
-          'Paste a Cloudflare API token with Workers AI (Read) permission. Prompts to Qwen3 and gpt-oss then go to Cloudflare.',
-        password: true,
-        ignoreFocusOut: true,
-        validateInput: validateCloudflareTokenShape,
-      });
-      if (token === undefined) return;
-      await cloudflareTokens.set(token);
-      void vscode.window.showInformationMessage('Cloudflare token saved in the Keychain.');
-    }),
-    vscode.commands.registerCommand('oreo.clearCloudflareToken', async () => {
-      await cloudflareTokens.clear();
-      void vscode.window.showInformationMessage('Cloudflare token removed.');
-    }),
-    cloudflareTokens.onDidChange(() => void controller.refresh()),
     // A new token or binary takes effect on the next start.
     githubTokens.onDidChange(() => void host.stop()),
     vscode.workspace.onDidChangeConfiguration((e) => {
-      if (e.affectsConfiguration('oreo.ollamaUrl') || e.affectsConfiguration('oreo.cloudflare.accountId')) {
+      if (e.affectsConfiguration('oreo.ollamaUrl') || e.affectsConfiguration('oreo.cloudUrl')) {
         void controller.refresh();
       }
       if (e.affectsConfiguration('oreo.githubMcp.path')) {

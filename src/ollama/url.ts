@@ -1,21 +1,22 @@
 /**
- * Validates the "oreo.ollamaUrl" setting and strips trailing slashes,
- * so paths can be appended safely. Throws with a readable message.
+ * Validates the "oreo.ollamaUrl" setting (or another URL setting, such as
+ * "oreo.cloudUrl") and strips trailing slashes, so paths can be appended safely.
+ * Throws with a readable message.
  */
-export function normalizeOllamaUrl(raw: string): string {
+export function normalizeOllamaUrl(raw: string, setting = 'oreo.ollamaUrl'): string {
   const trimmed = raw.trim();
-  if (!trimmed) throw new Error('The "oreo.ollamaUrl" setting is empty.');
+  if (!trimmed) throw new Error(`The "${setting}" setting is empty.`);
   let url: URL;
   try {
     url = new URL(trimmed);
   } catch {
-    throw new Error(`"${trimmed}" in "oreo.ollamaUrl" is not a valid URL.`);
+    throw new Error(`"${trimmed}" in "${setting}" is not a valid URL.`);
   }
   if (url.protocol !== 'https:' && url.protocol !== 'http:') {
-    throw new Error('"oreo.ollamaUrl" must start with http:// or https://.');
+    throw new Error(`"${setting}" must start with http:// or https://.`);
   }
   if (url.search || url.hash) {
-    throw new Error('"oreo.ollamaUrl" must not contain a query string or fragment.');
+    throw new Error(`"${setting}" must not contain a query string or fragment.`);
   }
   return url.toString().replace(/\/+$/, '');
 }

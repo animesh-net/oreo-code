@@ -13,6 +13,11 @@ describe('normalizeOllamaUrl', () => {
     expect(() => normalizeOllamaUrl('ftp://host')).toThrow(/http:\/\/ or https:\/\//);
     expect(() => normalizeOllamaUrl('http://host/?x=1')).toThrow(/query string/);
   });
+
+  it('names the setting it checks, such as oreo.cloudUrl', () => {
+    expect(normalizeOllamaUrl('https://ai.animesh.org.in/v1/', 'oreo.cloudUrl')).toBe('https://ai.animesh.org.in/v1');
+    expect(() => normalizeOllamaUrl('ftp://host', 'oreo.cloudUrl')).toThrow(/"oreo\.cloudUrl" must start/);
+  });
 });
 
 describe('tailscaleOllamaUrls', () => {

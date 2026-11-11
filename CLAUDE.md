@@ -104,10 +104,12 @@ fix/<name_fix>` from it, push the new name, then ask before deleting the old
 # This repo
 
 oreo-code is a VS Code extension that chats with the Oreo models on the Mac's own
-Ollama and, with a Cloudflare token, two Workers AI models. It calls Ollama directly
+Ollama and two Workers AI models through oreo-ai's relay. It calls Ollama directly
 (`GET /api/tags` for the model list, `POST /v1/chat/completions` streamed over
-SSE) at the `oreo.ollamaUrl` setting, and Workers AI's `/ai/v1/chat/completions`
-directly. The oreo-ai server is not used: no sign-in. The models are created from the Modelfiles in oreo-ai's
+SSE) at the `oreo.ollamaUrl` setting. The Cloudflare models go through oreo-ai's
+relay on the Pi at the `oreo.cloudUrl` setting (`GET /models`, `POST
+/chat/completions`, relayed unchanged to Workers AI with the Pi's token), reachable
+over Tailscale only; nothing else of oreo-ai is used: no sign-in. The models are created from the Modelfiles in oreo-ai's
 `ollama/` folder. The plan: sidebar chat and a local `github-mcp-server` over
 stdio (now), then an agent loop with approval cards, and local workspace tools.
 
@@ -116,7 +118,7 @@ stdio (now), then an agent loop with approval cards, and local workspace tools.
 | `src/extension.ts`            | `activate()`: commands, sidebar view, status bar                                               |
 | `src/auth/`                   | Secrets in VS Code SecretStorage (the macOS Keychain)                                          |
 | `src/ollama/`                 | Ollama client (OpenAI-compatible), the fixed model list, URL check and error wording           |
-| `src/cloudflare/`             | Workers AI client (thinking per model, `<think>` filter) and its error wording                 |
+| `src/cloudflare/`             | Workers AI client via oreo-ai's relay (model list, thinking, `<think>` filter), error wording  |
 | `src/chat/`                   | Chat state and turns; no `vscode` imports, unit tested                                         |
 | `src/views/`                  | Webview host, CSP, message relay                                                               |
 | `src/mcp/`                    | Pinned `github-mcp-server` download, MCP host and stdio client                                 |
@@ -140,9 +142,10 @@ stdio (now), then an agent loop with approval cards, and local workspace tools.
   `webview-ui/markdown.ts`: raw HTML off, images off, links limited to http and
   https. Keep the CSP in `src/views/chatViewProvider.ts` strict: no inline scripts,
   no remote content, no `unsafe-eval`.
-- **Cloudflare is opt-in.** Nothing goes to Workers AI unless a Cloudflare model is
-  picked; its token lives only in `src/auth/cloudflareToken.ts` (SecretStorage) and
-  is sent only to api.cloudflare.com.
+- **Cloudflare is opt-in.** Nothing goes to oreo-ai or Cloudflare unless a Cloudflare
+  model is picked (only the relay's `GET /models` runs to grey models in or out).
+  No Cloudflare token or account id anywhere in the extension: oreo-ai's relay on
+  the Pi holds the token, and network access over Tailscale is the access control.
 - **Models are named once** in `src/ollama/models.ts` (`OREO_MODELS`); no model id
   anywhere else and no model editing. Ollama's `GET /api/tags` only marks which
   are installed. The extension only offers a dropdown; agent mode uses only

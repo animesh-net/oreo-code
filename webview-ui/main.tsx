@@ -148,7 +148,9 @@ function App() {
                   if (!group.length) return null;
                   return (
                     <Fragment key={provider}>
-                      <p class="menu-heading">{provider === 'macbook' ? 'This Mac' : 'Cloudflare (leaves the Mac)'}</p>
+                      <p class="menu-heading">
+                        {provider === 'macbook' ? 'This Mac' : 'Cloudflare via oreo-ai (leaves the Mac)'}
+                      </p>
                       {group.map((m) => (
                         <button
                           key={m.id}
@@ -160,7 +162,7 @@ function App() {
                         >
                           {m.available
                             ? m.name
-                            : `${m.name} (${provider === 'macbook' ? 'not in Ollama' : 'set a Cloudflare token'})`}
+                            : `${m.name} (${provider === 'macbook' ? 'not in Ollama' : 'oreo-ai not reachable'})`}
                         </button>
                       ))}
                     </Fragment>

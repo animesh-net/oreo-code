@@ -63,16 +63,6 @@
         "command": "oreo.checkForUpdates",
         "title": "Check for updates",
         "category": "Oreo Code"
-      },
-      {
-        "command": "oreo.setCloudflareToken",
-        "title": "Set Cloudflare token",
-        "category": "Oreo Code"
-      },
-      {
-        "command": "oreo.clearCloudflareToken",
-        "title": "Clear Cloudflare token",
-        "category": "Oreo Code"
       }
     ],
     "menus": {
@@ -107,10 +97,10 @@
           "default": true,
           "markdownDescription": "Install new Oreo Code releases from GitHub on its own (at start-up and every 6 hours), then offer a reload. Uses the GitHub token from `Oreo Code: Set GitHub token`, which needs Contents (read) on `animesh-net/oreo-code`."
         },
-        "oreo.cloudflare.accountId": {
+        "oreo.cloudUrl": {
           "type": "string",
-          "default": "",
-          "markdownDescription": "Cloudflare account id for the Workers AI models (Qwen3 30B, gpt-oss 120B). With `Oreo Code: Set Cloudflare token` they appear next to the Mac's models; what you send them leaves the Mac."
+          "default": "https://ai.animesh.org.in/v1",
+          "markdownDescription": "oreo-ai's Workers AI relay on the Pi, reachable over Tailscale only, for the Cloudflare models (Qwen3 30B, gpt-oss 120B). oreo-ai holds the Cloudflare token; what you send these models leaves the Mac. Leave empty to turn the Cloudflare models off."
         }
       }
     }
