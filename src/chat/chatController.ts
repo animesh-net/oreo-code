@@ -1,6 +1,6 @@
 import type { ModelClient } from '../ollama/client';
-import { describeOllamaError } from '../ollama/errors';
-import { normalizeOllamaUrl } from '../ollama/url';
+import { describeOllamaError, isUnreachable } from '../ollama/errors';
+import { isLoopbackUrl, normalizeOllamaUrl } from '../ollama/url';
 import {
   DEFAULT_EFFORT,
   REASONING_EFFORTS,
@@ -24,6 +24,11 @@ export interface ChatControllerDeps {
   /** Remembers the thinking effort picked in the dropdown. */
   rememberEffort(effort: ReasoningEffort): void;
   createClient(ollamaUrl: string): ModelClient;
+  /**
+   * Other addresses to try when nothing answers at a local URL (127.0.0.1 or
+   * localhost): the Mac's Tailscale addresses, where oreo-ai's script binds Ollama.
+   */
+  fallbackOllamaUrls?(ollamaUrl: string): string[];
   /** Sends a message to the webview (a no-op while the view is closed). */
   post(message: ToWebview): void;
   /** Called after every state change, e.g. to update the status bar. */
@@ -77,9 +82,36 @@ export class ChatController {
       }
     } catch (err) {
       if (seq !== this.refreshSeq) return;
-      this.error = describeOllamaError(err, this.ollamaUrl);
+      if (!(isUnreachable(err) && (await this.tryFallbacks(seq)))) {
+        if (seq !== this.refreshSeq) return;
+        this.error = describeOllamaError(err, this.ollamaUrl);
+      }
     }
+    if (seq !== this.refreshSeq) return;
     this.publish();
+  }
+
+  /** Looks for Ollama at the fallback addresses; uses the first that answers. */
+  private async tryFallbacks(seq: number): Promise<boolean> {
+    if (!isLoopbackUrl(this.ollamaUrl)) return false;
+    for (const url of this.deps.fallbackOllamaUrls?.(this.ollamaUrl) ?? []) {
+      const client = this.deps.createClient(url);
+      try {
+        const models = await client.listModels();
+        if (seq !== this.refreshSeq) return true;
+        this.ollamaUrl = url;
+        this.client = client;
+        this.models = models;
+        this.selectedModel = pickModel(models, this.selectedModel, this.deps.getLastModel());
+        if (!this.selectedModel) {
+          this.error = `Ollama at ${this.ollamaUrl} has none of the Oreo models. Create them from oreo-ai's Modelfiles.`;
+        }
+        return true;
+      } catch {
+        // Not there either; try the next one.
+      }
+    }
+    return false;
   }
 
   async handle(message: FromWebview): Promise<void> {

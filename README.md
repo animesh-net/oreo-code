@@ -38,7 +38,7 @@ For the latest version-tagged release instead, drop the first line and `$tag`. `
    ollama create oreo-2b -f ~/oreo-ai/ollama/Modelfile.oreo-2b
    ```
 
-2. Point `oreo.ollamaUrl` at Ollama. The default, `http://127.0.0.1:11434`, works when Ollama listens on localhost. If it listens only on the Mac's Tailscale address, set `oreo.ollamaUrl` to `http://<tailscale ip>:11434`, or start Ollama with `OLLAMA_HOST=0.0.0.0` so it also answers on localhost. Changing the setting reloads the model list.
+2. Leave `oreo.ollamaUrl` at its default, `http://127.0.0.1:11434`. If nothing answers there, the extension looks for Ollama at the same port on the Mac's Tailscale address (any `100.64.0.0/10` address on its network interfaces, found without the `tailscale` command), which is where oreo-ai's `scripts/oreo-ai.sh models` makes it listen, and uses the first that answers. It looks again each time the model list loads (start-up, **Retry**, a settings change), so it follows Ollama when it moves. Set `oreo.ollamaUrl` to another address only if Ollama is elsewhere; a non-local address is used as given. Changing the setting reloads the model list.
 3. Open the **Oreo** view in the activity bar, and chat. As in the Claude app, the message box has the text on top and, below it, a pill showing the model and whether it thinks (for example **Oreo 4B Thinking off**) and a round Send button. The pill opens one menu for the model and for **Thinking**, which offers only what the model takes: both models are qwen3.5, which can only think or not, so it shows **Off** and **On** (each model's style is set once in `src/ollama/models.ts`). The pick is sent with every message as `reasoning_effort`: `none` for Off, and the remembered level for On (medium the first time), which Ollama turns into thinking on. It starts off, because the models are small and slow to think on the M1, and remembers your pick. **Stop** keeps the partial reply; a failed reply is discarded and your text goes back into the box.
 
 If Ollama isn't running, the view says so in one line and offers **Retry**.
@@ -57,10 +57,10 @@ To use your own build of the server instead, set `oreo.githubMcp.path` to it.
 
 ## Settings
 
-| Setting               | Default                  | Purpose                                                                   |
-| --------------------- | ------------------------ | ------------------------------------------------------------------------- |
-| `oreo.ollamaUrl`      | `http://127.0.0.1:11434` | Base URL of Ollama; use `http://<tailscale ip>:11434` if it listens there |
-| `oreo.githubMcp.path` | (empty)                  | Your own `github-mcp-server` binary; empty downloads the pinned release   |
+| Setting               | Default                  | Purpose                                                                         |
+| --------------------- | ------------------------ | ------------------------------------------------------------------------------- |
+| `oreo.ollamaUrl`      | `http://127.0.0.1:11434` | Base URL of Ollama; on a local address the Mac's Tailscale address is tried too |
+| `oreo.githubMcp.path` | (empty)                  | Your own `github-mcp-server` binary; empty downloads the pinned release         |
 
 ## Commands
 
@@ -94,7 +94,7 @@ src/
   ollama/models.ts          the two Oreo models, named once, and which Ollama has
   ollama/client.ts          Ollama's /api/tags and OpenAI-compatible /v1 chat
   ollama/errors.ts          one-sentence error messages for the chat view
-  ollama/url.ts             validates the oreo.ollamaUrl setting
+  ollama/url.ts             validates the oreo.ollamaUrl setting, finds the Tailscale fallback
   chat/chatController.ts    chat state and turns; no vscode imports, unit tested
   views/chatViewProvider.ts webview host, CSP, message relay
   shared/protocol.ts        messages between the extension and the webview

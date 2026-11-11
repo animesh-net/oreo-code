@@ -20,6 +20,11 @@ export function describeOllamaError(err: unknown, ollamaUrl: string, model?: str
   return 'Something went wrong talking to Ollama.';
 }
 
+/** Nothing answered at the address: Ollama isn't running or listens elsewhere. */
+export function isUnreachable(err: unknown): boolean {
+  return err instanceof APIConnectionError || (statusOf(err) === undefined && isNetworkError(err));
+}
+
 function unreachable(ollamaUrl: string): string {
   return `Can't reach Ollama at ${ollamaUrl}. Is it running?`;
 }

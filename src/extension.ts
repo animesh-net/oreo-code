@@ -1,3 +1,4 @@
+import * as os from 'node:os';
 import * as vscode from 'vscode';
 import { GithubTokenStore, validateGithubTokenShape } from './auth/githubToken';
 import { ChatController } from './chat/chatController';
@@ -6,6 +7,7 @@ import { githubServerSpec } from './mcp/githubServer';
 import { McpHost } from './mcp/host';
 import { stdioConnect } from './mcp/stdioConnect';
 import { OllamaClient } from './ollama/client';
+import { tailscaleOllamaUrls } from './ollama/url';
 import type { ReasoningEffort, ViewState } from './shared/protocol';
 import { ChatViewProvider } from './views/chatViewProvider';
 
@@ -30,6 +32,7 @@ export function activate(context: vscode.ExtensionContext): void {
     getEffort: () => context.globalState.get<ReasoningEffort>(EFFORT_KEY),
     rememberEffort: (effort) => void context.globalState.update(EFFORT_KEY, effort),
     createClient: (ollamaUrl) => new OllamaClient(ollamaUrl),
+    fallbackOllamaUrls: (ollamaUrl) => tailscaleOllamaUrls(ollamaUrl, os.networkInterfaces()),
     post: (message) => view.post(message),
     onState: (state) => updateStatus(status, state),
   });

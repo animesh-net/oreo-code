@@ -49,6 +49,81 @@ async function* chunks(...parts: string[]) {
 }
 
 describe('ChatController', () => {
+  it("finds Ollama on the Mac's Tailscale address when nothing answers on localhost", async () => {
+    const refused = Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNREFUSED' } });
+    const tried: string[] = [];
+    const controller = new ChatController({
+      getOllamaUrl: () => 'http://127.0.0.1:11434',
+      getLastModel: () => undefined,
+      rememberModel: () => {},
+      getEffort: () => undefined,
+      rememberEffort: () => {},
+      createClient: (url) => {
+        tried.push(url);
+        return fakeClient(
+          () => chunks(),
+          async () => {
+            if (url === 'http://100.70.213.221:11434') return models;
+            throw refused;
+          },
+        );
+      },
+      fallbackOllamaUrls: () => ['http://100.101.0.9:11434', 'http://100.70.213.221:11434'],
+      post: () => {},
+    });
+    await controller.refresh();
+    expect(tried).toEqual(['http://127.0.0.1:11434', 'http://100.101.0.9:11434', 'http://100.70.213.221:11434']);
+    expect(controller.state).toMatchObject({
+      ollamaUrl: 'http://100.70.213.221:11434',
+      selectedModel: 'oreo-4b',
+      error: undefined,
+    });
+  });
+
+  it('keeps the error for the configured URL when no fallback answers', async () => {
+    const refused = Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNREFUSED' } });
+    const { controller } = setup(
+      fakeClient(
+        () => chunks(),
+        async () => {
+          throw refused;
+        },
+      ),
+      { fallbackOllamaUrls: () => ['http://100.70.213.221:11434'] },
+    );
+    await controller.refresh();
+    expect(controller.state.ollamaUrl).toBe('http://127.0.0.1:11434');
+    expect(controller.state.error).toBe("Can't reach Ollama at http://127.0.0.1:11434. Is it running?");
+  });
+
+  it('does not look elsewhere when a non-local URL is set or Ollama answered with an error', async () => {
+    let asked = 0;
+    const fallbackOllamaUrls = () => {
+      asked++;
+      return ['http://100.70.213.221:11434'];
+    };
+    const refused = Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNREFUSED' } });
+    await setup(
+      fakeClient(
+        () => chunks(),
+        async () => {
+          throw refused;
+        },
+      ),
+      { getOllamaUrl: () => 'http://100.64.0.2:11434', fallbackOllamaUrls },
+    ).controller.refresh();
+    await setup(
+      fakeClient(
+        () => chunks(),
+        async () => {
+          throw new OllamaHttpError(500, 'boom');
+        },
+      ),
+      { fallbackOllamaUrls },
+    ).controller.refresh();
+    expect(asked).toBe(0);
+  });
+
   it('talks to the normalized Ollama URL with no sign-in', async () => {
     const { controller, urls } = setup(fakeClient(() => chunks()));
     await controller.refresh();
