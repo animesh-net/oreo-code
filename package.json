@@ -138,5 +138,10 @@
     "*.{ts,tsx,mjs,mts,json,md,yaml,yml,css}": [
       "prettier --write"
     ]
+  },
+  "overrides": {
+    "@vscode/vsce": {
+      "minimatch": "^11.0.8"
+    }
   }
 }
