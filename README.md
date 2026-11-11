@@ -1,8 +1,8 @@
 # Oreo Code
 
-A VS Code extension that chats with the Oreo models on your Mac's own [Ollama](https://ollama.com), in the VS Code sidebar, and will grow into a coding agent that works on your GitHub repos from the Mac.
+A VS Code extension that chats with the Oreo models on your Mac's own [Ollama](https://ollama.com), and optionally two models on Cloudflare Workers AI, in the VS Code sidebar, and will grow into a coding agent that works on your GitHub repos from the Mac.
 
-Everything runs on the Mac, inside this extension: it calls Ollama directly, with no API token, no sign-in and no oreo-ai server in between. The models themselves come from the Modelfiles in [oreo-ai](https://github.com/animesh-net/oreo-ai)'s `ollama/` folder.
+The extension calls Ollama on the Mac directly, with no sign-in and no oreo-ai server in between. With a Cloudflare token set, it also calls Workers AI directly; nothing goes there unless you pick a Cloudflare model. The models themselves come from the Modelfiles in [oreo-ai](https://github.com/animesh-net/oreo-ai)'s `ollama/` folder.
 
 ## Status
 
@@ -13,9 +13,18 @@ Everything runs on the Mac, inside this extension: it calls Ollama directly, wit
 | M5        | Agent loop, approval cards, local session history                  | Started: read-only repo tools |
 | M6        | Local workspace tools (unsaved files, diff-view edits, build/test) | Started: reads unsaved files  |
 
-The extension offers two models, fixed in `src/ollama/models.ts`: **Oreo 4B** (`oreo-4b`, can use tools) and **Oreo 2B** (`oreo-2b`). The pill in the message box switches between them, greys out any model Ollama doesn't have (matched as `oreo-4b` or `oreo-4b:latest`), and remembers your last pick.
+The extension offers four models, fixed in `src/ollama/models.ts`, as in oreo-ai:
 
-Chat uses Ollama's own endpoints: `GET <oreo.ollamaUrl>/api/tags` to see which models are installed, and the OpenAI-compatible `POST <oreo.ollamaUrl>/v1/chat/completions`, streamed over SSE. The extension host makes these calls, not the webview.
+| Model        | Runs on                                   | Tools | Thinking            | Context |
+| ------------ | ----------------------------------------- | ----- | ------------------- | ------- |
+| Oreo 4B      | This Mac (`oreo-4b`)                      | Yes   | Off / On            | 32K     |
+| Oreo 2B      | This Mac (`oreo-2b`)                      | No    | Off / On            | 32K     |
+| Qwen3 30B    | Cloudflare (`@cf/qwen/qwen3-30b-a3b-fp8`) | Yes   | Off / On            | 32K     |
+| gpt-oss 120B | Cloudflare (`@cf/openai/gpt-oss-120b`)    | Yes   | Low / Medium / High | 128K    |
+
+The pill in the message box opens a menu grouped into **This Mac** and **Cloudflare (leaves the Mac)**. It greys out a Mac model Ollama doesn't have (matched as `oreo-4b` or `oreo-4b:latest`) and the Cloudflare models until a token is set, and remembers your last pick. The Cloudflare models are much stronger at reviewing code than the Mac's small ones, but your question, the repo snapshot and any file they read go to Cloudflare. On the free plan Workers AI allows 10,000 Neurons a day; a review that reads many files with gpt-oss uses a good share of that.
+
+Chat uses Ollama's own endpoints: `GET <oreo.ollamaUrl>/api/tags` to see which models are installed, and the OpenAI-compatible `POST <oreo.ollamaUrl>/v1/chat/completions`, streamed over SSE. The Cloudflare models use Workers AI's OpenAI-compatible `POST https://api.cloudflare.com/client/v4/accounts/<id>/ai/v1/chat/completions`, sent the same way oreo-ai does: Qwen3 is switched off with `/no_think` in the system message, gpt-oss gets `reasoning_effort` (low for Off), and `max_tokens` is 4,096, doubled when the model thinks. The extension host makes these calls, not the webview.
 
 ## Install
 
@@ -40,7 +49,9 @@ After that the extension updates itself: 15 seconds after VS Code starts and eve
 
 2. Leave `oreo.ollamaUrl` at its default, `http://127.0.0.1:11434`. If nothing answers there, the extension looks for Ollama at the same port on the Mac's Tailscale address (any `100.64.0.0/10` address on its network interfaces, found without the `tailscale` command), which is where oreo-ai's `scripts/oreo-ai.sh models` makes it listen, and uses the first that answers. It looks again each time the model list loads (start-up, **Retry**, a settings change), so it follows Ollama when it moves. Set `oreo.ollamaUrl` to another address only if Ollama is elsewhere; a non-local address is used as given. Changing the setting reloads the model list.
 3. Open the **Oreo Code** view in the activity bar, and chat. As in the Claude app, the message box has the text on top and, below it, a pill showing the model and whether it thinks (for example **Oreo 4B Thinking off**) and a round Send button. The pill opens one menu for the model and for **Thinking**, which offers only what the model takes: both models are qwen3.5, which can only think or not, so it shows **Off** and **On** (each model's style is set once in `src/ollama/models.ts`). The pick is sent with every message as `reasoning_effort`: `none` for Off, and the remembered level for On (medium the first time), which Ollama turns into thinking on. It starts off, because the models are small and slow to think on the M1, and remembers your pick. **Stop** keeps the partial reply; a failed reply is discarded and your text goes back into the box.
-4. Ask about the open repository. Every message carries a snapshot of it: the folder name, the branch, its file list (without `node_modules`, `.git`, build output and `files.exclude`) and the file in the active editor with any selection. **Oreo 4B** can also use three read-only tools while it answers: `list_files`, `search` and `read_file` (with line numbers, 12,000 characters at a time, unsaved editor text first). Each one it uses is shown above its reply, for example **→ Read src/extension.ts**. `search` takes plain text or a regular expression such as `TODO|FIXME`. While the model thinks, the reply shows **Thinking…**. It gets up to 8 rounds of tools, then must answer; if a reply still ends empty (a thinking model sometimes stops after its tools), it is asked once more with thinking off, and if that is empty too the turn fails and your text goes back into the box. The models have a 32K-token context and Ollama cuts longer prompts silently, so the prompt is kept under about 72,000 characters: the oldest earlier messages go first, then the oldest tool results are replaced by a note. It can't change files; it suggests changes as code. Files that may hold secrets (`.env*`, keys, `.npmrc`, `secrets.*`) are never read, searched or sent. **Oreo 2B** can't use tools, so it sees only the snapshot and asks you to open other files.
+4. Ask about the open repository. Every message carries a snapshot of it: the folder name, the branch, its file list (without `node_modules`, `.git`, build output and `files.exclude`) and the file in the active editor with any selection. **Oreo 4B**, **Qwen3 30B** and **gpt-oss 120B** can also use three read-only tools while it answers: `list_files`, `search` and `read_file` (with line numbers, 12,000 characters at a time, unsaved editor text first). Each one it uses is shown above its reply, for example **→ Read src/extension.ts**. `search` takes plain text or a regular expression such as `TODO|FIXME`. While the model thinks, the reply shows **Thinking…**. It gets up to 8 rounds of tools, then must answer; if a reply still ends empty (a thinking model sometimes stops after its tools), it is asked once more with thinking off, and if that is empty too the turn fails and your text goes back into the box. Ollama cuts a prompt longer than the context silently, so the prompt is kept under about 72,000 characters (200,000 for gpt-oss, with its 128K context): the oldest earlier messages go first, then the oldest tool results are replaced by a note. It can't change files; it suggests changes as code. Files that may hold secrets (`.env*`, keys, `.npmrc`, `secrets.*`) are never read, searched or sent. **Oreo 2B** can't use tools, so it sees only the snapshot and asks you to open other files.
+5. Replies are rendered as Markdown: headings, lists, tables, code blocks and links. Raw HTML in a reply is shown as text, images aren't loaded, and only `http` and `https` links work.
+6. To use the Cloudflare models, run `Oreo Code: Set Cloudflare token`. It asks for your Cloudflare account id the first time (stored in `oreo.cloudflare.accountId`), then a Cloudflare API token with **Workers AI (Read)**, which goes in the Keychain. The same token as oreo-ai's `Cloudflare__ApiToken` works. The models appear in the pill's menu at once. If Ollama is down, the Cloudflare models still work.
 
 If Ollama isn't running, the view says so in one line and offers **Retry**. Ollama gets 10 minutes to start answering (loading the model and reading a long prompt can take minutes on an 8 GB M1); a reply that has started is never cut off. If it doesn't start in time, the view says so and suggests Thinking off, Oreo 2B or a new chat.
 
@@ -58,21 +69,24 @@ To use your own build of the server instead, set `oreo.githubMcp.path` to it.
 
 ## Settings
 
-| Setting               | Default                  | Purpose                                                                         |
-| --------------------- | ------------------------ | ------------------------------------------------------------------------------- |
-| `oreo.ollamaUrl`      | `http://127.0.0.1:11434` | Base URL of Ollama; on a local address the Mac's Tailscale address is tried too |
-| `oreo.githubMcp.path` | (empty)                  | Your own `github-mcp-server` binary; empty downloads the pinned release         |
-| `oreo.autoUpdate`     | `true`                   | Install new releases from GitHub by itself and offer a reload                   |
+| Setting                     | Default                  | Purpose                                                                         |
+| --------------------------- | ------------------------ | ------------------------------------------------------------------------------- |
+| `oreo.ollamaUrl`            | `http://127.0.0.1:11434` | Base URL of Ollama; on a local address the Mac's Tailscale address is tried too |
+| `oreo.githubMcp.path`       | (empty)                  | Your own `github-mcp-server` binary; empty downloads the pinned release         |
+| `oreo.autoUpdate`           | `true`                   | Install new releases from GitHub by itself and offer a reload                   |
+| `oreo.cloudflare.accountId` | (empty)                  | Cloudflare account id for the Workers AI models; the token is in the Keychain   |
 
 ## Commands
 
-| Command                         | What it does                                                                           |
-| ------------------------------- | -------------------------------------------------------------------------------------- |
-| `Oreo Code: New chat`           | Clears the conversation (also the + button on the view)                                |
-| `Oreo Code: Set GitHub token`   | Stores the GitHub token for the local `github-mcp-server`                              |
-| `Oreo Code: Clear GitHub token` | Removes it                                                                             |
-| `Oreo Code: Show GitHub tools`  | Starts `github-mcp-server` if needed and lists its tools in the Oreo Code output panel |
-| `Oreo Code: Check for updates`  | Installs the newest release now, if there is one (also in the view's … menu)           |
+| Command                             | What it does                                                                           |
+| ----------------------------------- | -------------------------------------------------------------------------------------- |
+| `Oreo Code: New chat`               | Clears the conversation (also the + button on the view)                                |
+| `Oreo Code: Set GitHub token`       | Stores the GitHub token for the local `github-mcp-server`                              |
+| `Oreo Code: Clear GitHub token`     | Removes it                                                                             |
+| `Oreo Code: Show GitHub tools`      | Starts `github-mcp-server` if needed and lists its tools in the Oreo Code output panel |
+| `Oreo Code: Check for updates`      | Installs the newest release now, if there is one (also in the view's … menu)           |
+| `Oreo Code: Set Cloudflare token`   | Stores the account id and the Workers AI token for Qwen3 30B and gpt-oss 120B          |
+| `Oreo Code: Clear Cloudflare token` | Removes the token; the Cloudflare models are greyed out                                |
 
 ## Develop
 
@@ -98,6 +112,9 @@ src/
   ollama/client.ts          Ollama's /api/tags and OpenAI-compatible /v1 chat
   ollama/errors.ts          one-sentence error messages for the chat view
   ollama/url.ts             validates the oreo.ollamaUrl setting, finds the Tailscale fallback
+  cloudflare/client.ts      Workers AI's OpenAI-compatible chat, thinking per model, <think> filter
+  cloudflare/errors.ts      one-sentence Cloudflare error messages
+  auth/cloudflareToken.ts   Cloudflare token in SecretStorage
   chat/chatController.ts    chat state, turns and the tool loop; no vscode imports, unit tested
   chat/context.ts           the repo snapshot sent as the system prompt
   views/chatViewProvider.ts webview host, CSP, message relay
@@ -110,7 +127,7 @@ src/
   agent/workspaceTools.ts   read-only list_files, read_file and search; secret files refused
   workspace/vscodeWorkspace.ts  the open folder: files, unsaved text, branch, active editor
   update/releases.ts        finds and downloads a newer release from GitHub
-webview-ui/                 Preact chat UI, bundled to dist/webview.js
+webview-ui/                 Preact chat UI (markdown.ts renders replies safely), bundled to dist/webview.js
 test/                       Vitest unit tests
 ```
 

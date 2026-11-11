@@ -1,4 +1,4 @@
-import { render } from 'preact';
+import { Fragment, render } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import {
   effortChoices,
@@ -8,6 +8,7 @@ import {
   type ToWebview,
   type ViewState,
 } from '../src/shared/protocol';
+import { renderMarkdown } from './markdown';
 import { vscode } from './vscode';
 import './styles.css';
 
@@ -142,19 +143,29 @@ function App() {
             </button>
             {menuOpen && (
               <div class="menu" role="menu">
-                <p class="menu-heading">Model</p>
-                {state.models.map((m) => (
-                  <button
-                    key={m.id}
-                    class="menu-item"
-                    role="menuitemradio"
-                    aria-checked={m.id === state.selectedModel}
-                    disabled={!m.available}
-                    onClick={() => vscode.postMessage({ type: 'selectModel', modelId: m.id })}
-                  >
-                    {m.available ? m.name : `${m.name} (not in Ollama)`}
-                  </button>
-                ))}
+                {(['macbook', 'cloudflare'] as const).map((provider) => {
+                  const group = state.models.filter((m) => m.provider === provider);
+                  if (!group.length) return null;
+                  return (
+                    <Fragment key={provider}>
+                      <p class="menu-heading">{provider === 'macbook' ? 'This Mac' : 'Cloudflare (leaves the Mac)'}</p>
+                      {group.map((m) => (
+                        <button
+                          key={m.id}
+                          class="menu-item"
+                          role="menuitemradio"
+                          aria-checked={m.id === state.selectedModel}
+                          disabled={!m.available}
+                          onClick={() => vscode.postMessage({ type: 'selectModel', modelId: m.id })}
+                        >
+                          {m.available
+                            ? m.name
+                            : `${m.name} (${provider === 'macbook' ? 'not in Ollama' : 'set a Cloudflare token'})`}
+                        </button>
+                      ))}
+                    </Fragment>
+                  );
+                })}
                 {model && (
                   <>
                     <p class="menu-heading">Thinking</p>
@@ -209,8 +220,12 @@ function Bubble({ message, pending }: { message: ChatMessage; pending?: string }
           ))}
         </ul>
       )}
-      {/* Rendered as plain text on purpose: model output is untrusted. */}
-      <div class="content">{message.content || pending || ''}</div>
+      {/* Replies are Markdown, rendered with raw HTML off and http(s)-only links (markdown.ts). */}
+      {message.role === 'assistant' && message.content ? (
+        <div class="content markdown" dangerouslySetInnerHTML={{ __html: renderMarkdown(message.content) }} />
+      ) : (
+        <div class="content">{message.content || pending || ''}</div>
+      )}
     </div>
   );
 }

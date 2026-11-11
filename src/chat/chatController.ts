@@ -1,7 +1,9 @@
 import { runWorkspaceTool, WORKSPACE_TOOLS, type Workspace } from '../agent/workspaceTools';
 import type { ModelClient, ToolCall, WireMessage } from '../ollama/client';
 import { buildSystemPrompt } from './context';
+import { describeCloudflareError } from '../cloudflare/errors';
 import { describeOllamaError, isUnreachable } from '../ollama/errors';
+import { OREO_MODELS } from '../ollama/models';
 import { isLoopbackUrl, normalizeOllamaUrl } from '../ollama/url';
 import {
   DEFAULT_EFFORT,
@@ -31,6 +33,11 @@ export interface ChatControllerDeps {
    * localhost): the Mac's Tailscale addresses, where oreo-ai's script binds Ollama.
    */
   fallbackOllamaUrls?(ollamaUrl: string): string[];
+  /**
+   * The Workers AI client, or undefined when no Cloudflare account id and token are
+   * set; the cloud models are then listed but not usable.
+   */
+  getCloudClient?(): Promise<ModelClient | undefined>;
   /** The open folder, for the repo snapshot and the read-only tools; none if no folder is open. */
   getWorkspace?(): Workspace | undefined;
   /** Sends a message to the webview (a no-op while the view is closed). */
@@ -81,6 +88,7 @@ export const MAX_TOOL_ROUNDS = 8;
 export class ChatController {
   private ollamaUrl = '';
   private client: ModelClient | undefined;
+  private cloud: ModelClient | undefined;
   private models: ModelInfo[] = [];
   private selectedModel: string | undefined;
   private messages: ChatMessage[] = [];
@@ -94,6 +102,7 @@ export class ChatController {
   /** Re-reads the Ollama URL setting, then reloads the model list. */
   async refresh(): Promise<void> {
     const seq = ++this.refreshSeq;
+    const prior = this.selectedModel;
     this.error = undefined;
     this.client = undefined;
     this.models = [];
@@ -124,7 +133,28 @@ export class ChatController {
       }
     }
     if (seq !== this.refreshSeq) return;
+    await this.addCloudModels(seq, prior);
+    if (seq !== this.refreshSeq) return;
     this.publish();
+  }
+
+  /**
+   * Lists the Workers AI models after the Mac's. With a Cloudflare token they can be
+   * used even when Ollama is down; an Ollama problem is then shown only if no model
+   * at all can be picked.
+   */
+  private async addCloudModels(seq: number, prior: string | undefined): Promise<void> {
+    const cloud = await this.deps.getCloudClient?.();
+    if (seq !== this.refreshSeq) return;
+    this.cloud = cloud;
+    const mac = this.models.length
+      ? this.models
+      : OREO_MODELS.filter((m) => m.provider === 'macbook').map((m) => ({ ...m, available: false }));
+    const inCloud = OREO_MODELS.filter((m) => m.provider === 'cloudflare').map((m) => ({ ...m, available: !!cloud }));
+    this.models = [...mac, ...inCloud];
+    // Picked again from the full list, so a remembered cloud model isn't lost to the Mac's.
+    this.selectedModel = pickModel(this.models, prior, this.deps.getLastModel());
+    if (this.selectedModel) this.error = undefined;
   }
 
   /** Looks for Ollama at the fallback addresses; uses the first that answers. */
@@ -210,8 +240,10 @@ export class ChatController {
 
   private async send(rawText: string): Promise<void> {
     const text = rawText.trim();
-    const client = this.client;
     const model = this.selectedModel;
+    const info = this.models.find((m) => m.id === model);
+    const inCloud = info?.provider === 'cloudflare';
+    const client = inCloud ? this.cloud : this.client;
     if (!text || this.busy || !client || !model) return;
 
     const turnStart = this.messages.length;
@@ -231,7 +263,6 @@ export class ChatController {
       this.messages.push(message);
     };
     try {
-      const info = this.models.find((m) => m.id === model);
       const workspace = this.deps.getWorkspace?.();
       const tools = info?.supportsTools && workspace ? WORKSPACE_TOOLS : undefined;
       const wire: WireMessage[] = [
@@ -244,7 +275,7 @@ export class ChatController {
         let calls: ToolCall[] | undefined;
         const offered = tools && round < MAX_TOOL_ROUNDS ? tools : undefined;
         let thinking = false;
-        question = fitToContext(wire, question);
+        question = fitToContext(wire, question, info?.maxPromptChars);
         for await (const event of client.streamChat(model, wire, abort.signal, this.effort, offered)) {
           if (event.type === 'toolCalls') {
             calls = event.calls;
@@ -274,7 +305,7 @@ export class ChatController {
       // once more, without tools or thinking; if that is empty too, it's a failure.
       if (!reply.trim()) {
         wire.push({ role: 'user', content: 'Using what you found, answer my question now.' });
-        fitToContext(wire, question);
+        fitToContext(wire, question, info?.maxPromptChars);
         for await (const event of client.streamChat(model, wire, abort.signal, 'none')) {
           if (event.type !== 'text') continue;
           reply += event.text;
@@ -290,7 +321,7 @@ export class ChatController {
         else this.messages.splice(turnStart);
       } else {
         this.messages.splice(turnStart);
-        const message = describeOllamaError(err, this.ollamaUrl, model);
+        const message = inCloud ? describeCloudflareError(err) : describeOllamaError(err, this.ollamaUrl, model);
         this.error = message;
         this.deps.post({ type: 'failed', message, draft: text });
       }

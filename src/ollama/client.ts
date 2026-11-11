@@ -94,28 +94,43 @@ export class OllamaClient implements ModelClient {
       },
       { signal },
     );
-    // Tool calls may arrive in pieces, by index; they are passed on once the stream ends.
-    const calls: ToolCall[] = [];
-    for await (const chunk of stream) {
-      const delta = chunk.choices[0]?.delta;
-      // Ollama's /v1 streams a thinking model's reasoning as delta.reasoning; only its
-      // presence is passed on, so the view can say the model is thinking.
-      if ((delta as { reasoning?: unknown } | undefined)?.reasoning) yield { type: 'thinking' };
-      if (delta?.content) yield { type: 'text', text: delta.content };
-      for (const part of delta?.tool_calls ?? []) {
-        const call = (calls[part.index] ??= {
-          id: part.id ?? `call_${part.index}`,
-          type: 'function',
-          function: { name: '', arguments: '' },
-        });
-        if (part.id) call.id = part.id;
-        if (part.function?.name) call.function.name += part.function.name;
-        if (part.function?.arguments) call.function.arguments += part.function.arguments;
-      }
-    }
-    const complete = calls.filter((c) => c?.function.name);
-    if (complete.length) yield { type: 'toolCalls', calls: complete };
+    yield* readEvents(stream);
   }
+}
+
+/** The chunk fields both Ollama's /v1 and Workers AI's /ai/v1 stream. */
+type Chunk = OpenAI.Chat.ChatCompletionChunk;
+
+/**
+ * Turns an OpenAI-style stream into events: text as it arrives, a sign the model is
+ * thinking (Ollama sends `delta.reasoning`, Workers AI `delta.reasoning_content`;
+ * only their presence is passed on), and the tool calls once the stream ends, joined
+ * from pieces that arrive by index. `filter` may rewrite or drop text pieces.
+ */
+export async function* readEvents(
+  stream: AsyncIterable<Chunk>,
+  filter: (text: string) => string = (t) => t,
+): AsyncIterable<StreamEvent> {
+  const calls: ToolCall[] = [];
+  for await (const chunk of stream) {
+    const delta = chunk.choices[0]?.delta as
+      (Chunk['choices'][number]['delta'] & { reasoning?: unknown; reasoning_content?: unknown }) | undefined;
+    if (delta?.reasoning || delta?.reasoning_content) yield { type: 'thinking' };
+    const text = delta?.content ? filter(delta.content) : '';
+    if (text) yield { type: 'text', text };
+    for (const part of delta?.tool_calls ?? []) {
+      const call = (calls[part.index] ??= {
+        id: part.id ?? `call_${part.index}`,
+        type: 'function',
+        function: { name: '', arguments: '' },
+      });
+      if (part.id) call.id = part.id;
+      if (part.function?.name) call.function.name += part.function.name;
+      if (part.function?.arguments) call.function.arguments += part.function.arguments;
+    }
+  }
+  const complete = calls.filter((c) => c?.function.name);
+  if (complete.length) yield { type: 'toolCalls', calls: complete };
 }
 
 async function readMessage(res: Response): Promise<string | undefined> {

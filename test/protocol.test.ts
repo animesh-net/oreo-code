@@ -23,6 +23,8 @@ describe('Thinking menu', () => {
     expect(OREO_MODELS.map((m) => [m.id, m.thinking])).toEqual([
       ['oreo-4b', 'switch'],
       ['oreo-2b', 'switch'],
+      ['@cf/qwen/qwen3-30b-a3b-fp8', 'switch'],
+      ['@cf/openai/gpt-oss-120b', 'levels'],
     ]);
   });
 });

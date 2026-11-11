@@ -13,9 +13,33 @@ import { OllamaHttpError } from '../src/ollama/errors';
 import type { ChatMessage, ModelInfo, ToWebview } from '../src/shared/protocol';
 
 const models: ModelInfo[] = [
-  { id: 'oreo-4b', name: 'Oreo 4B', provider: 'macbook', supportsTools: true, thinking: 'switch', available: true },
-  { id: 'oreo-2b', name: 'Oreo 2B', provider: 'macbook', supportsTools: false, thinking: 'switch', available: true },
-  { id: 'oreo-9b', name: 'Oreo 9B', provider: 'macbook', supportsTools: false, thinking: 'switch', available: false },
+  {
+    id: 'oreo-4b',
+    name: 'Oreo 4B',
+    provider: 'macbook',
+    supportsTools: true,
+    thinking: 'switch',
+    maxPromptChars: 72_000,
+    available: true,
+  },
+  {
+    id: 'oreo-2b',
+    name: 'Oreo 2B',
+    provider: 'macbook',
+    supportsTools: false,
+    thinking: 'switch',
+    maxPromptChars: 72_000,
+    available: true,
+  },
+  {
+    id: 'oreo-9b',
+    name: 'Oreo 9B',
+    provider: 'macbook',
+    supportsTools: false,
+    thinking: 'switch',
+    maxPromptChars: 72_000,
+    available: false,
+  },
 ];
 
 const efforts: string[] = [];
@@ -151,7 +175,14 @@ describe('ChatController', () => {
     );
     await controller.refresh();
     expect(controller.state.selectedModel).toBe('oreo-2b');
-    expect(controller.state.models).toHaveLength(3);
+    // The three from Ollama, then the two Workers AI models (unusable without a token).
+    expect(controller.state.models.map((m) => [m.id, m.available])).toEqual([
+      ['oreo-4b', true],
+      ['oreo-2b', true],
+      ['oreo-9b', false],
+      ['@cf/qwen/qwen3-30b-a3b-fp8', false],
+      ['@cf/openai/gpt-oss-120b', false],
+    ]);
   });
 
   it('says Ollama is unreachable in one sentence', async () => {
@@ -165,7 +196,7 @@ describe('ChatController', () => {
       ),
     );
     await controller.refresh();
-    expect(controller.state.models).toEqual([]);
+    expect(controller.state.models.every((m) => !m.available)).toBe(true);
     expect(controller.state.error).toBe("Can't reach Ollama at http://127.0.0.1:11434. Is it running?");
   });
 
@@ -475,5 +506,70 @@ describe('empty replies, thinking and the context window', () => {
     ];
     expect(fitToContext(wire, 1)).toBe(1);
     expect(wire).toHaveLength(2);
+  });
+});
+
+describe('Cloudflare models', () => {
+  function cloudClient() {
+    const calls: string[] = [];
+    const client: ModelClient = {
+      listModels: async () => [],
+      async *streamChat(model) {
+        calls.push(model);
+        yield { type: 'text', text: 'from the cloud' };
+      },
+    };
+    return { client, calls };
+  }
+
+  it('lists the Workers AI models as usable with a token and sends to the cloud client', async () => {
+    const cloud = cloudClient();
+    const { controller } = setup(
+      fakeClient(() => chunks('from the Mac')),
+      { getCloudClient: async () => cloud.client, getLastModel: () => '@cf/openai/gpt-oss-120b' },
+    );
+    await controller.refresh();
+    expect(controller.state.selectedModel).toBe('@cf/openai/gpt-oss-120b');
+    await controller.handle({ type: 'send', text: 'hi' });
+    expect(cloud.calls).toEqual(['@cf/openai/gpt-oss-120b']);
+    expect(controller.state.messages.at(-1)?.content).toBe('from the cloud');
+  });
+
+  it('still works through Cloudflare when Ollama is down, with no error shown', async () => {
+    const cloud = cloudClient();
+    const refused = Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNREFUSED' } });
+    const { controller } = setup(
+      fakeClient(
+        () => chunks(),
+        async () => {
+          throw refused;
+        },
+      ),
+      { getCloudClient: async () => cloud.client },
+    );
+    await controller.refresh();
+    expect(controller.state.error).toBeUndefined();
+    expect(controller.state.selectedModel).toBe('@cf/qwen/qwen3-30b-a3b-fp8');
+    expect(controller.state.models.filter((m) => m.available).map((m) => m.provider)).toEqual([
+      'cloudflare',
+      'cloudflare',
+    ]);
+  });
+
+  it('words a Cloudflare failure as Cloudflare, not Ollama', async () => {
+    const client: ModelClient = {
+      listModels: async () => [],
+      // eslint-disable-next-line require-yield
+      async *streamChat() {
+        throw new Error('quota');
+      },
+    };
+    const { controller } = setup(
+      fakeClient(() => chunks()),
+      { getCloudClient: async () => client, getLastModel: () => '@cf/qwen/qwen3-30b-a3b-fp8' },
+    );
+    await controller.refresh();
+    await controller.handle({ type: 'send', text: 'hi' });
+    expect(controller.state.error).toBe('quota');
   });
 });
