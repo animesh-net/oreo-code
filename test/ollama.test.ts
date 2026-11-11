@@ -24,8 +24,8 @@ function sseResponse(chunks: string[]): Response {
 describe('OREO_MODELS', () => {
   it('offers oreo-4b with tools and oreo-2b without, both on the MacBook', () => {
     expect(OREO_MODELS).toEqual([
-      { id: 'oreo-4b', name: 'Oreo 4B', provider: 'macbook', supportsTools: true },
-      { id: 'oreo-2b', name: 'Oreo 2B', provider: 'macbook', supportsTools: false },
+      { id: 'oreo-4b', name: 'Oreo 4B', provider: 'macbook', supportsTools: true, thinking: 'switch' },
+      { id: 'oreo-2b', name: 'Oreo 2B', provider: 'macbook', supportsTools: false, thinking: 'switch' },
     ]);
   });
 });
@@ -102,6 +102,28 @@ describe('OllamaClient', () => {
       reasoning_effort: 'none',
     });
   });
+
+  // Every level on both models goes out unchanged; Ollama turns any level but "none"
+  // into thinking on for qwen3.5.
+  it.each(OREO_MODELS.flatMap((m) => (['none', 'low', 'medium', 'high'] as const).map((e) => [m.id, e] as const)))(
+    'sends %s the effort %s as reasoning_effort',
+    async (model, effort) => {
+      let body: { model?: string; reasoning_effort?: string } = {};
+      const client = new OllamaClient(ollama, async (_input, init) => {
+        body = JSON.parse(String(init?.body));
+        return sseResponse(['ok']);
+      });
+      for await (const _ of client.streamChat(
+        model,
+        [{ role: 'user', content: 'hi' }],
+        new AbortController().signal,
+        effort,
+      )) {
+        // drain
+      }
+      expect(body).toMatchObject({ model, reasoning_effort: effort });
+    },
+  );
 });
 
 describe('describeOllamaError', () => {

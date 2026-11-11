@@ -53,7 +53,8 @@ export class OllamaClient implements ModelClient {
     signal: AbortSignal,
     effort: ReasoningEffort,
   ): AsyncIterable<string> {
-    // Ollama's /v1 honours reasoning_effort; "none" turns thinking off.
+    // Ollama's /v1 honours reasoning_effort: "none" turns thinking off, and on a model
+    // that can only think or not (qwen3.5) any level turns it on.
     const stream = await this.openai.chat.completions.create(
       { model, messages, stream: true, reasoning_effort: effort },
       { signal },

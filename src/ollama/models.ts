@@ -5,8 +5,9 @@ import type { ModelInfo } from '../shared/protocol';
  * Ollama from the Modelfiles in oreo-ai's `ollama/` folder. Listed default first.
  */
 export const OREO_MODELS: readonly Omit<ModelInfo, 'available'>[] = [
-  { id: 'oreo-4b', name: 'Oreo 4B', provider: 'macbook', supportsTools: true },
-  { id: 'oreo-2b', name: 'Oreo 2B', provider: 'macbook', supportsTools: false },
+  // Both are qwen3.5, which can only think or not.
+  { id: 'oreo-4b', name: 'Oreo 4B', provider: 'macbook', supportsTools: true, thinking: 'switch' },
+  { id: 'oreo-2b', name: 'Oreo 2B', provider: 'macbook', supportsTools: false, thinking: 'switch' },
 ];
 
 /**
