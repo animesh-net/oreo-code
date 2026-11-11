@@ -98,15 +98,15 @@ export function activate(context: vscode.ExtensionContext): void {
     output.show(true);
   };
 
-  // Updates: each main build is a release (v0.2.0, v0.2.1, ...). The repository is
-  // private, so the check uses the GitHub token from the Keychain.
+  // Updates: each main build is a release (v0.2.0, v0.2.1, ...). The check needs no
+  // token while the repository is public; a token is used first when there is one.
   let installedUpdate: string | undefined;
   let warnedAboutUpdates = false;
   const checkForUpdates = async (manual: boolean) => {
     if (!manual && !config().get<boolean>('autoUpdate', true)) return;
     let step = 'checking for a newer release';
     try {
-      // The Keychain token first, then the GitHub CLI's sign-in, as the repository is private.
+      // The Keychain token first, then the GitHub CLI's sign-in, then no token.
       const { release, token } = await findUpdateWithTokens(version, [() => githubTokens.get(), ghCliToken]);
       if (!release || release.version === installedUpdate) {
         if (manual) {

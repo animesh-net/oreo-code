@@ -90,9 +90,28 @@ describe('findUpdateWithTokens', () => {
     expect(result.token).toBe('gh');
   });
 
-  it('says how to add a token when there is none, and passes on a refusal when all are refused', async () => {
-    await expect(findUpdateWithTokens('0.2.0', [async () => undefined], byToken('x'))).rejects.toThrow(/gh auth login/);
-    await expect(findUpdateWithTokens('0.2.0', [async () => 'a'], byToken('x'))).rejects.toThrow(/Contents \(read\)/);
+  it('checks without a token when there is none, sending no Authorization header', async () => {
+    let auth: string | undefined = 'unset';
+    const result = await findUpdateWithTokens('0.2.0', [async () => undefined], async (_input, init) => {
+      auth = (init?.headers as Record<string, string>).Authorization;
+      return json(200, latest);
+    });
+    expect(auth).toBeUndefined();
+    expect(result).toMatchObject({ token: undefined, release: { version: '0.2.11' } });
+  });
+
+  it('falls back to no token when every token is refused', async () => {
+    const anonymousOk = async (_input: unknown, init?: RequestInit) =>
+      (init?.headers as Record<string, string>).Authorization ? json(401, {}) : json(200, latest);
+    const result = await findUpdateWithTokens('0.2.0', [async () => 'stale'], anonymousOk);
+    expect(result.token).toBeUndefined();
+    expect(result.release?.version).toBe('0.2.11');
+  });
+
+  it('passes on the last refusal when the check without a token is refused too', async () => {
+    await expect(findUpdateWithTokens('0.2.0', [async () => 'a'], byToken('x'))).rejects.toThrow(
+      /No release found in /,
+    );
   });
 });
 

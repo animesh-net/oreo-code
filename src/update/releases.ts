@@ -7,7 +7,7 @@ export const RELEASES_REPO = 'animesh-net/oreo-code';
 export interface Release {
   version: string;
   assetName: string;
-  /** The asset's API URL; downloading it needs the token, as the repo is private. */
+  /** The asset's API URL; a token is sent with the download when one was used for the check. */
   assetUrl: string;
 }
 
@@ -37,14 +37,15 @@ export class ReleaseCheckError extends Error {
   }
 }
 
-function headers(token: string, accept: string): Record<string, string> {
-  return { Accept: accept, Authorization: `Bearer ${token}`, 'X-GitHub-Api-Version': '2022-11-28' };
+function headers(token: string | undefined, accept: string): Record<string, string> {
+  const base: Record<string, string> = { Accept: accept, 'X-GitHub-Api-Version': '2022-11-28' };
+  return token ? { ...base, Authorization: `Bearer ${token}` } : base;
 }
 
 /** The newest release, if it is newer than `current` and has a VSIX. */
 export async function findUpdate(
   current: string,
-  token: string,
+  token: string | undefined,
   fetchImpl: FetchLike = fetch,
   signal?: AbortSignal,
 ): Promise<Release | undefined> {
@@ -55,7 +56,9 @@ export async function findUpdate(
   if (res.status === 404) {
     throw new ReleaseCheckError(
       404,
-      `No release found, or the GitHub token can't read ${RELEASES_REPO}. Give it Contents (read) on that repository.`,
+      token
+        ? `No release found, or the GitHub token can't read ${RELEASES_REPO}. Give it Contents (read) on that repository.`
+        : `No release found in ${RELEASES_REPO}.`,
     );
   }
   if (!res.ok) throw new ReleaseCheckError(res.status, `GitHub answered ${res.status} when checking for updates.`);
@@ -70,7 +73,7 @@ export async function findUpdate(
 /** Downloads the VSIX. GitHub redirects to storage; fetch drops the token on that hop. */
 export async function downloadRelease(
   release: Release,
-  token: string,
+  token: string | undefined,
   fetchImpl: FetchLike = fetch,
   signal?: AbortSignal,
 ): Promise<Uint8Array> {
@@ -81,20 +84,24 @@ export async function downloadRelease(
 }
 
 /**
- * Tries each token source in turn (the Keychain token, then the GitHub CLI's) and
- * returns the first answer. A source with no token is skipped; a token GitHub
- * refuses (401, 403, 404) moves on to the next. With no usable token at all, throws
- * the last refusal, or says that no token is set.
+ * Tries each token source in turn (the Keychain token, then the GitHub CLI's), then
+ * no token, which works while the repository is public. A source with no token is
+ * skipped; a refusal (401, 403, 404) moves on to the next. If every try is refused,
+ * throws the last refusal.
  */
 export async function findUpdateWithTokens(
   current: string,
   sources: (() => Promise<string | undefined>)[],
   fetchImpl: FetchLike = fetch,
-): Promise<{ release: Release | undefined; token: string }> {
-  let refused: ReleaseCheckError | undefined;
+): Promise<{ release: Release | undefined; token: string | undefined }> {
+  const tokens: (string | undefined)[] = [];
   for (const source of sources) {
     const token = await source();
-    if (!token) continue;
+    if (token) tokens.push(token);
+  }
+  tokens.push(undefined);
+  let refused: ReleaseCheckError | undefined;
+  for (const token of tokens) {
     try {
       return { release: await findUpdate(current, token, fetchImpl), token };
     } catch (err) {
@@ -105,12 +112,7 @@ export async function findUpdateWithTokens(
       throw err;
     }
   }
-  throw (
-    refused ??
-    new Error(
-      `No GitHub token to check for updates. Run "Oreo Code: Set GitHub token", or sign in with "gh auth login".`,
-    )
-  );
+  throw refused;
 }
 
 /**
