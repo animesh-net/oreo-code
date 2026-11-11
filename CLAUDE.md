@@ -125,7 +125,7 @@ stdio (now), then an agent loop with approval cards, and local workspace tools.
 | `src/agent/`                  | Tool catalog (namespacing, read/write, allowlist) and the write policy                         |
 | `src/agent/workspaceTools.ts` | Read-only workspace tools (list, read, search); secret files refused                           |
 | `src/workspace/`              | The open folder for the snapshot and tools: files, unsaved text, branch, active editor         |
-| `src/update/`                 | Self-update: newest GitHub release, downloaded with the Keychain token                         |
+| `src/update/`                 | Self-update: newest GitHub release, with a token if there is one, else none (public repo)      |
 | `src/shared/protocol.ts`      | Messages between the extension and the webview; both bundles compile with it                   |
 | `webview-ui/`                 | Preact chat UI, bundled to `dist/webview.js`                                                   |
 | `test/`                       | Vitest unit tests                                                                              |
