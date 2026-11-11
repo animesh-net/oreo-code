@@ -30,6 +30,14 @@ describe('OREO_MODELS', () => {
       ['@cf/openai/gpt-oss-120b', 'cloudflare', true, 'levels', 200_000],
     ]);
   });
+
+  it('names every model "Oreo <size>", and a Mac model\'s id "oreo-<size>"', () => {
+    expect(OREO_MODELS.map((m) => m.name)).toEqual(['Oreo 4B', 'Oreo 2B', 'Oreo 30B', 'Oreo 120B']);
+    for (const m of OREO_MODELS) {
+      expect(m.name).toMatch(/^Oreo \d+B$/);
+      if (m.provider === 'macbook') expect(m.id).toBe(m.name.toLowerCase().replace(' ', '-'));
+    }
+  });
 });
 
 describe('modelsFromTags', () => {

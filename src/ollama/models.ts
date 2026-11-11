@@ -5,6 +5,8 @@ import type { ModelInfo } from '../shared/protocol';
  * created from the Modelfiles in oreo-ai's `ollama/` folder, and two on Cloudflare
  * Workers AI, as in oreo-ai. Listed default first. The prompt budgets keep within
  * each context window at about 3 characters a token, leaving room for the reply.
+ * Every display name is "Oreo <size>" (parameters, upper-case B); the menu's groups
+ * say where each runs, and the id is the provider's own name for it.
  */
 export const OREO_MODELS: readonly Omit<ModelInfo, 'available'>[] = [
   // Both are qwen3.5 with a 32K context, which can only think or not.
@@ -27,7 +29,7 @@ export const OREO_MODELS: readonly Omit<ModelInfo, 'available'>[] = [
   // Qwen3 has a 32K context and a thinking switch; gpt-oss 128K and always reasons.
   {
     id: '@cf/qwen/qwen3-30b-a3b-fp8',
-    name: 'Qwen3 30B',
+    name: 'Oreo 30B',
     provider: 'cloudflare',
     supportsTools: true,
     thinking: 'switch',
@@ -35,7 +37,7 @@ export const OREO_MODELS: readonly Omit<ModelInfo, 'available'>[] = [
   },
   {
     id: '@cf/openai/gpt-oss-120b',
-    name: 'gpt-oss 120B',
+    name: 'Oreo 120B',
     provider: 'cloudflare',
     supportsTools: true,
     thinking: 'levels',

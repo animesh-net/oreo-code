@@ -21,8 +21,17 @@ export async function buildSystemPrompt(ws: Workspace | undefined, withTools: bo
   );
   lines.push(
     withTools
-      ? 'Use the tools list_files, search and read_file to look at the code before you answer; never guess what a file contains. You can only read: suggest changes as code in your reply, naming the file and lines. Say which files you looked at.'
+      ? 'Use the tools list_files, search and read_file to look at the code before you answer; never guess what a file contains. Before saying how a function is used, search for its name and read its callers. You can only read: suggest changes as code in your reply, naming the file and lines. Say which files you looked at.'
       : "You can't open files. You see the file list below and the file open in the editor; if you need another file, ask the user to open it in the editor.",
+  );
+  lines.push(
+    '',
+    'When asked to find bugs or review code:',
+    '- Report a bug only if you can show it: the file and line, the input or call that triggers it, and what goes wrong. No trigger, no bug.',
+    '- Check each finding against the code you read. If a caller already handles the case, or your own quote shows the code is fine, drop it.',
+    '- Refactors, style and "could be cleaner" are not bugs. List them separately as suggestions, or leave them out.',
+    '- Finding no bugs is a good answer. Say what you checked and that it looks correct; never make one up to have something to report.',
+    '- Put the most serious first and keep each finding short.',
   );
 
   const shown = files.slice(0, MAX_TREE);

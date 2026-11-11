@@ -99,6 +99,15 @@ describe('system prompt', () => {
     expect(prompt).toContain("You can't open files");
   });
 
+  it('asks for bugs with a trigger and allows finding none, with or without tools', async () => {
+    for (const withTools of [true, false]) {
+      const prompt = await buildSystemPrompt(workspace(), withTools);
+      expect(prompt).toContain('No trigger, no bug.');
+      expect(prompt).toContain('Finding no bugs is a good answer.');
+    }
+    expect(await buildSystemPrompt(workspace(), true)).toContain('read its callers');
+  });
+
   it('says when no folder is open', async () => {
     expect(await buildSystemPrompt(undefined, true)).toContain('No folder is open');
   });
