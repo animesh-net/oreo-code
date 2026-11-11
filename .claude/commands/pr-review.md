@@ -36,7 +36,7 @@ Base branch: $ARGUMENTS (use `main` if not specified)
      - Secrets only through `src/auth/` (SecretStorage), never logged or put in settings
      - Webview renders model output as plain text; CSP unchanged or stricter
      - No model ids in code; models only from `GET /api/models`, switched with the dropdown
-     - `src/chat/` and `src/gateway/` free of `vscode` imports
+     - `src/chat/` and `src/ollama/` free of `vscode` imports
      - README updated for user-facing changes
      - No `Co-Authored-By` AI attribution in commit messages
 

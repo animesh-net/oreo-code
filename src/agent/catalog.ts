@@ -19,7 +19,7 @@ export interface CatalogTool {
   toolClass: ToolClass;
 }
 
-/** An OpenAI-style function definition, as sent to the oreo-ai gateway. */
+/** An OpenAI-style function definition, as sent to Ollama's OpenAI-compatible API. */
 export interface FunctionTool {
   type: 'function';
   function: { name: string; description: string; parameters: Record<string, unknown> };

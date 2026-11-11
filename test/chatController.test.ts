@@ -1,21 +1,23 @@
 import { describe, expect, it } from 'vitest';
 import { ChatController, pickModel, type ChatControllerDeps } from '../src/chat/chatController';
-import type { Gateway } from '../src/gateway/client';
-import { GatewayHttpError } from '../src/gateway/errors';
+import type { ModelClient } from '../src/ollama/client';
+import { OllamaHttpError } from '../src/ollama/errors';
 import type { ChatMessage, ModelInfo, ToWebview } from '../src/shared/protocol';
 
 const models: ModelInfo[] = [
-  { id: 'gpt-oss-120b', name: 'GPT OSS 120B', provider: 'cloudflare', supportsTools: true, available: true },
-  { id: 'qwen3', name: 'Qwen3 30B', provider: 'cloudflare', supportsTools: false, available: true },
-  { id: 'oreo-4b', name: 'Oreo 4B', provider: 'macbook', supportsTools: false, available: true },
-  { id: 'oreo-2b', name: 'Oreo 2B', provider: 'macbook', supportsTools: false, available: false },
+  { id: 'oreo-4b', name: 'Oreo 4B', provider: 'macbook', supportsTools: true, available: true },
+  { id: 'oreo-2b', name: 'Oreo 2B', provider: 'macbook', supportsTools: false, available: true },
+  { id: 'oreo-9b', name: 'Oreo 9B', provider: 'macbook', supportsTools: false, available: false },
 ];
 
 const efforts: string[] = [];
 
-function fakeGateway(stream: (messages: ChatMessage[], signal: AbortSignal) => AsyncIterable<string>): Gateway {
+function fakeClient(
+  stream: (messages: ChatMessage[], signal: AbortSignal) => AsyncIterable<string>,
+  list: () => Promise<ModelInfo[]> = async () => models,
+): ModelClient {
   return {
-    listModels: async () => models,
+    listModels: list,
     streamChat: (_model, messages, signal, effort) => {
       efforts.push(effort);
       return stream(messages, signal);
@@ -23,21 +25,23 @@ function fakeGateway(stream: (messages: ChatMessage[], signal: AbortSignal) => A
   };
 }
 
-function setup(gateway: Gateway, token: string | null = 'oreo_t', overrides: Partial<ChatControllerDeps> = {}) {
+function setup(client: ModelClient, overrides: Partial<ChatControllerDeps> = {}) {
   const posted: ToWebview[] = [];
+  const urls: string[] = [];
   const controller = new ChatController({
-    getServerUrl: () => 'https://oreo.test/',
+    getOllamaUrl: () => 'http://127.0.0.1:11434/',
     getLastModel: () => undefined,
     rememberModel: () => {},
     getEffort: () => undefined,
     rememberEffort: () => {},
-    getToken: async () => token ?? undefined,
-    createGateway: () => gateway,
+    createClient: (url) => {
+      urls.push(url);
+      return client;
+    },
     post: (m) => posted.push(m),
-    signIn: async () => {},
     ...overrides,
   });
-  return { controller, posted };
+  return { controller, posted, urls };
 }
 
 async function* chunks(...parts: string[]) {
@@ -45,30 +49,54 @@ async function* chunks(...parts: string[]) {
 }
 
 describe('ChatController', () => {
-  it('shows signed out without a token', async () => {
-    const { controller } = setup(
-      fakeGateway(() => chunks()),
-      null,
-    );
+  it('talks to the normalized Ollama URL with no sign-in', async () => {
+    const { controller, urls } = setup(fakeClient(() => chunks()));
     await controller.refresh();
-    expect(controller.state).toMatchObject({ signedIn: false, serverUrl: 'https://oreo.test' });
+    expect(urls).toEqual(['http://127.0.0.1:11434']);
+    expect(controller.state).toMatchObject({ ollamaUrl: 'http://127.0.0.1:11434', error: undefined });
   });
 
   it('loads models and preselects the last dropdown choice', async () => {
     const { controller } = setup(
-      fakeGateway(() => chunks()),
-      'oreo_t',
-      { getLastModel: () => 'qwen3' },
+      fakeClient(() => chunks()),
+      { getLastModel: () => 'oreo-2b' },
     );
     await controller.refresh();
-    expect(controller.state).toMatchObject({ signedIn: true, selectedModel: 'qwen3' });
-    expect(controller.state.models).toHaveLength(4);
+    expect(controller.state.selectedModel).toBe('oreo-2b');
+    expect(controller.state.models).toHaveLength(3);
+  });
+
+  it('says Ollama is unreachable in one sentence', async () => {
+    const refused = Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNREFUSED' } });
+    const { controller } = setup(
+      fakeClient(
+        () => chunks(),
+        async () => {
+          throw refused;
+        },
+      ),
+    );
+    await controller.refresh();
+    expect(controller.state.models).toEqual([]);
+    expect(controller.state.error).toBe("Can't reach Ollama at http://127.0.0.1:11434. Is it running?");
+  });
+
+  it('explains when Ollama has none of the Oreo models', async () => {
+    const { controller } = setup(
+      fakeClient(
+        () => chunks(),
+        async () => models.map((m) => ({ ...m, available: false })),
+      ),
+    );
+    await controller.refresh();
+    expect(controller.state.selectedModel).toBeUndefined();
+    expect(controller.state.error).toMatch(/none of the Oreo models/);
   });
 
   it('streams a reply and keeps the finished turn', async () => {
     let sentHistory: ChatMessage[] = [];
     const { controller, posted } = setup(
-      fakeGateway((messages) => {
+      fakeClient((messages) => {
         sentHistory = messages;
         return chunks('Hel', 'lo');
       }),
@@ -88,15 +116,15 @@ describe('ChatController', () => {
 
   it('drops a failed turn and returns the text to the input', async () => {
     const { controller, posted } = setup(
-      fakeGateway(async function* () {
+      fakeClient(async function* () {
         yield 'partial';
-        throw new GatewayHttpError(429);
+        throw new OllamaHttpError(404);
       }),
     );
     await controller.refresh();
     await controller.handle({ type: 'send', text: 'hi' });
     expect(controller.state.messages).toEqual([]);
-    expect(controller.state.error).toMatch(/limit/);
+    expect(controller.state.error).toMatch(/^oreo-4b isn't in Ollama/);
     expect(posted).toContainEqual(expect.objectContaining({ type: 'failed', draft: 'hi' }));
   });
 
@@ -104,7 +132,7 @@ describe('ChatController', () => {
     let release!: () => void;
     const gate = new Promise<void>((r) => (release = r));
     const { controller } = setup(
-      fakeGateway(async function* (_messages, signal) {
+      fakeClient(async function* (_messages, signal) {
         yield 'part';
         await gate;
         if (signal.aborted) throw new Error('aborted');
@@ -124,30 +152,29 @@ describe('ChatController', () => {
   });
 
   it('first available model is the default when nothing was picked before', async () => {
-    const { controller } = setup(fakeGateway(() => chunks()));
+    const { controller } = setup(fakeClient(() => chunks()));
     await controller.refresh();
-    expect(controller.state.selectedModel).toBe('gpt-oss-120b');
+    expect(controller.state.selectedModel).toBe('oreo-4b');
   });
 
   it('refuses to select an unavailable model and remembers valid picks', async () => {
     const remembered: string[] = [];
     const { controller } = setup(
-      fakeGateway(() => chunks()),
-      'oreo_t',
+      fakeClient(() => chunks()),
       { rememberModel: (id) => remembered.push(id) },
     );
     await controller.refresh();
-    await controller.handle({ type: 'selectModel', modelId: 'oreo-2b' });
-    expect(controller.state.selectedModel).toBe('gpt-oss-120b');
-    await controller.handle({ type: 'selectModel', modelId: 'oreo-4b' });
+    await controller.handle({ type: 'selectModel', modelId: 'oreo-9b' });
     expect(controller.state.selectedModel).toBe('oreo-4b');
-    expect(remembered).toEqual(['oreo-4b']);
+    await controller.handle({ type: 'selectModel', modelId: 'oreo-2b' });
+    expect(controller.state.selectedModel).toBe('oreo-2b');
+    expect(remembered).toEqual(['oreo-2b']);
   });
 
   it('ignores empty sends', async () => {
     let calls = 0;
     const { controller } = setup(
-      fakeGateway(() => {
+      fakeClient(() => {
         calls++;
         return chunks('ok');
       }),
@@ -157,69 +184,71 @@ describe('ChatController', () => {
     expect(calls).toBe(0);
   });
 
-  it('reports a bad server URL without calling the gateway', async () => {
-    const { controller } = setup(
-      fakeGateway(() => chunks()),
-      'oreo_t',
-      { getServerUrl: () => 'ftp://x' },
+  it('reports a bad Ollama URL without calling Ollama', async () => {
+    const { controller, urls } = setup(
+      fakeClient(() => chunks()),
+      { getOllamaUrl: () => 'ftp://x' },
     );
     await controller.refresh();
-    expect(controller.state).toMatchObject({ signedIn: false });
-    expect(controller.state.error).toMatch(/https:\/\//);
+    expect(urls).toEqual([]);
+    expect(controller.state.error).toMatch(/http:\/\//);
   });
 });
 
 describe('thinking effort', () => {
-  it('defaults to medium on Cloudflare and none on the Mac, and goes with each request', async () => {
+  it('defaults to none and goes with each request', async () => {
     efforts.length = 0;
-    const { controller } = setup(fakeGateway(() => chunks('ok')));
+    const { controller } = setup(fakeClient(() => chunks('ok')));
     await controller.refresh();
-    expect(controller.state.effort).toBe('medium');
-    await controller.handle({ type: 'send', text: 'hi' });
-
-    await controller.handle({ type: 'selectModel', modelId: 'oreo-4b' });
     expect(controller.state.effort).toBe('none');
-    await controller.handle({ type: 'send', text: 'hi again' });
-
-    expect(efforts).toEqual(['medium', 'none']);
+    await controller.handle({ type: 'send', text: 'hi' });
+    expect(efforts).toEqual(['none']);
   });
 
-  it('remembers your pick per provider and ignores unknown values', async () => {
-    const saved = new Map<string, string>();
+  it('remembers your pick, uses it for every model and ignores unknown values', async () => {
+    efforts.length = 0;
+    let saved: string | undefined = 'medium';
     const { controller } = setup(
-      fakeGateway(() => chunks('ok')),
-      'oreo_t',
+      fakeClient(() => chunks('ok')),
       {
-        getEffort: (provider) => saved.get(provider) as never,
-        rememberEffort: (provider, effort) => saved.set(provider, effort),
+        getEffort: () => saved as never,
+        rememberEffort: (effort) => (saved = effort),
       },
     );
     await controller.refresh();
+    expect(controller.state.effort).toBe('medium');
 
     await controller.handle({ type: 'selectEffort', effort: 'high' });
+    expect(saved).toBe('high');
+    await controller.handle({ type: 'selectModel', modelId: 'oreo-2b' });
     expect(controller.state.effort).toBe('high');
-    expect(saved.get('cloudflare')).toBe('high');
-
-    await controller.handle({ type: 'selectModel', modelId: 'oreo-4b' });
-    expect(controller.state.effort).toBe('none');
-    await controller.handle({ type: 'selectEffort', effort: 'low' });
-    expect(saved.get('macbook')).toBe('low');
+    await controller.handle({ type: 'send', text: 'hi' });
+    expect(efforts).toEqual(['high']);
 
     await controller.handle({ type: 'selectEffort', effort: 'extreme' as never });
-    expect(controller.state.effort).toBe('low');
+    expect(controller.state.effort).toBe('high');
+  });
+
+  it('falls back to none if a stored value is no longer valid', async () => {
+    const { controller } = setup(
+      fakeClient(() => chunks()),
+      { getEffort: () => 'extreme' as never },
+    );
+    await controller.refresh();
+    expect(controller.state.effort).toBe('none');
   });
 });
 
 describe('pickModel', () => {
   it('keeps the current model, then the preferred one, then the first', () => {
-    expect(pickModel(models, 'qwen3', 'gpt-oss-120b')).toBe('qwen3');
-    expect(pickModel(models, 'gone', 'qwen3')).toBe('qwen3');
-    expect(pickModel(models, undefined, 'missing')).toBe('gpt-oss-120b');
+    expect(pickModel(models, 'oreo-2b', 'oreo-4b')).toBe('oreo-2b');
+    expect(pickModel(models, 'gone', 'oreo-2b')).toBe('oreo-2b');
+    expect(pickModel(models, undefined, 'missing')).toBe('oreo-4b');
     expect(pickModel([], undefined, undefined)).toBeUndefined();
   });
 
-  it('skips unavailable models, e.g. when the MacBook is asleep', () => {
-    expect(pickModel(models, 'oreo-2b', 'oreo-2b')).toBe('gpt-oss-120b');
-    expect(pickModel(models, undefined, 'oreo-4b')).toBe('oreo-4b');
+  it('skips models Ollama does not have', () => {
+    expect(pickModel(models, 'oreo-9b', 'oreo-9b')).toBe('oreo-4b');
+    expect(pickModel(models, undefined, 'oreo-2b')).toBe('oreo-2b');
   });
 });

@@ -16,8 +16,8 @@ Target: $ARGUMENTS (use `HEAD` vs `HEAD~1` if not specified, or `main...HEAD` fo
 
 2. **Secrets**
    - Tokens are read and written only through `src/auth/` (SecretStorage); never in settings, logs, error messages or the webview state
-   - The GitHub token is never sent to oreo-ai; the oreo-ai token is sent only as a bearer header to `oreo.serverUrl`
-   - No real token, even expired, in code, tests or fixtures (`git diff --staged` for `oreo_`, `ghp_`, `github_pat_`)
+   - The GitHub token is never sent to Ollama; model calls carry no credentials
+   - No real token, even expired, in code, tests or fixtures (`git diff --staged` for `ghp_`, `github_pat_`)
 
 3. **Webview**
    - Model output and server messages are rendered as text, never as HTML (`dangerouslySetInnerHTML`, `innerHTML`)
@@ -26,7 +26,7 @@ Target: $ARGUMENTS (use `HEAD` vs `HEAD~1` if not specified, or `main...HEAD` fo
    - Messages from the webview are validated before use (model ids against the list, text trimmed and length-checked)
 
 4. **Network**
-   - `oreo.serverUrl` is validated (`normalizeServerUrl`); no requests to other hosts
+   - `oreo.ollamaUrl` is validated (`normalizeOllamaUrl`); no requests to other hosts
    - No retries that could loop on 429
 
 5. **Agent and tools** (once present)

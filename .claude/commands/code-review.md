@@ -31,6 +31,6 @@ Target: $ARGUMENTS (use `HEAD` vs `HEAD~1` if not specified, or `main...HEAD` fo
    - Disposables (commands, listeners, status bar items) are added to `context.subscriptions`
    - Webview messages go through the typed `ToWebview` / `FromWebview` unions
    - Long-running calls take an `AbortSignal` and stop on Stop or New chat
-   - User-facing error text comes from `src/gateway/errors.ts`
+   - User-facing error text comes from `src/ollama/errors.ts`
 
 3. **Present findings** as ✅ Good, ⚠️ Should improve (`file:line` — why), ❌ Must fix (`file:line` — why).

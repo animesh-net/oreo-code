@@ -4,7 +4,7 @@ const KEY = 'oreo.githubToken';
 
 /**
  * The GitHub token the local github-mcp-server uses, in VS Code SecretStorage (the
- * macOS Keychain). It is passed only to that child process, never to oreo-ai.
+ * macOS Keychain). It is passed only to that child process, never to Ollama.
  */
 export class GithubTokenStore {
   constructor(private readonly secrets: vscode.SecretStorage) {}

@@ -21,10 +21,10 @@ Target: $ARGUMENTS (use `HEAD` vs `HEAD~1` if not specified, or `main...HEAD` fo
    ```
 
 3. **For each changed source file, check:**
-   - Logic in `src/chat/`, `src/gateway/` (and later `src/agent/`, `src/mcp/`) has Vitest tests in `test/`
+   - Logic in `src/chat/`, `src/ollama/` (and later `src/agent/`, `src/mcp/`) has Vitest tests in `test/`
    - Error paths are tested: 401, 429, 503, network failure, aborted streams, malformed server responses
    - Assertions check behaviour (state, posted messages, request bodies), not just that nothing threw
-   - Fakes stand in for the gateway and MCP servers; no test calls the real oreo-ai or GitHub
+   - Fakes stand in for Ollama and MCP servers; no test calls the real Ollama or GitHub
    - New webview protocol messages are covered from the controller side
 
 4. **Present findings**: what is covered, what is missing (`file` — the case that needs a test), and any flaky patterns (timers, real network, order dependence).
