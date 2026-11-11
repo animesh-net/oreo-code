@@ -27,7 +27,7 @@ Install once by hand, in PowerShell:
 gh release download --repo animesh-net/oreo-code --pattern '*.vsix' --dir ~/Downloads --clobber; code --install-extension (Get-ChildItem ~/Downloads/oreo-code-*.vsix | Sort-Object LastWriteTime | Select-Object -Last 1).FullName --force
 ```
 
-After that the extension updates itself: 15 seconds after VS Code starts and every 6 hours it asks GitHub for the newest release and, if it's newer, downloads and installs it and offers **Reload**. `Oreo Code: Check for updates` checks straight away. The repository is private, so this uses the GitHub token from `Oreo Code: Set GitHub token`, which needs **Contents (read)** on `animesh-net/oreo-code` as well as on the repos the agent works on. Turn it off with `oreo.autoUpdate`.
+After that the extension updates itself: 15 seconds after VS Code starts and every 6 hours it asks GitHub for the newest release and, if it's newer, downloads and installs it and offers **Reload**. **Check for updates** in the Oreo Code panel's **…** menu (or `Oreo Code: Check for updates` in the Command Palette) checks straight away. The Extensions view never offers updates for it, as it isn't installed from the Marketplace. The repository is private, so this uses the GitHub token from `Oreo Code: Set GitHub token`, which needs **Contents (read)** on `animesh-net/oreo-code` as well as on the repos the agent works on. Turn it off with `oreo.autoUpdate`.
 
 ## Use
 
@@ -72,7 +72,7 @@ To use your own build of the server instead, set `oreo.githubMcp.path` to it.
 | `Oreo Code: Set GitHub token`   | Stores the GitHub token for the local `github-mcp-server`                              |
 | `Oreo Code: Clear GitHub token` | Removes it                                                                             |
 | `Oreo Code: Show GitHub tools`  | Starts `github-mcp-server` if needed and lists its tools in the Oreo Code output panel |
-| `Oreo Code: Check for updates`  | Installs the newest release now, if there is one                                       |
+| `Oreo Code: Check for updates`  | Installs the newest release now, if there is one (also in the view's … menu)           |
 
 ## Develop
 
