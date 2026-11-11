@@ -55,3 +55,7 @@ Part of the Oreo stack: [oreo-ai](https://github.com/animesh-net/oreo-ai) · [or
 ## Develop
 
 Node 22: `npm ci`, then `npm run check` (typecheck, tests, build); **F5** starts an Extension Development Host and `npm run package` builds a VSIX. Repo rules are in [CLAUDE.md](CLAUDE.md).
+
+## License
+
+Released under the [MIT License](LICENSE).
