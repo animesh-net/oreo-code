@@ -133,6 +133,8 @@ stdio (now), then an agent loop with approval cards, and local workspace tools.
 
 - **Secrets stay in SecretStorage.** The GitHub token lives only in `src/auth/`.
   Never log it, put it in settings or send it to Ollama.
+  `src/auth/ghCliToken.ts` reads the GitHub CLI's token, used only for the release
+  check and download in `src/update/`.
 - **Model output is untrusted.** The webview renders it as plain text. Keep the
   CSP in `src/views/chatViewProvider.ts` strict: no inline scripts, no remote
   content, no `unsafe-eval`. If Markdown rendering is added, raw HTML stays off

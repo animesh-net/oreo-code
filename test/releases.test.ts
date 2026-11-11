@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { downloadRelease, findUpdate, isNewer, parseVersion, RELEASES_REPO } from '../src/update/releases';
+import {
+  downloadRelease,
+  findUpdate,
+  findUpdateWithTokens,
+  isNewer,
+  parseVersion,
+  RELEASES_REPO,
+} from '../src/update/releases';
 
 const json = (status: number, body: unknown) =>
   new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
@@ -64,5 +71,26 @@ describe('downloadRelease', () => {
     );
     expect(accept).toBe('application/octet-stream');
     expect([...bytes]).toEqual([1, 2, 3]);
+  });
+});
+
+describe('findUpdateWithTokens', () => {
+  const byToken = (ok: string) => async (_input: unknown, init?: RequestInit) =>
+    (init?.headers as Record<string, string>).Authorization === `Bearer ${ok}` ? json(200, latest) : json(404, {});
+
+  it("falls back to the GitHub CLI's token when the Keychain token can't see the repo", async () => {
+    const result = await findUpdateWithTokens('0.2.0', [async () => 'keychain', async () => 'gh'], byToken('gh'));
+    expect(result.token).toBe('gh');
+    expect(result.release?.version).toBe('0.2.11');
+  });
+
+  it('skips a source with no token', async () => {
+    const result = await findUpdateWithTokens('0.2.0', [async () => undefined, async () => 'gh'], byToken('gh'));
+    expect(result.token).toBe('gh');
+  });
+
+  it('says how to add a token when there is none, and passes on a refusal when all are refused', async () => {
+    await expect(findUpdateWithTokens('0.2.0', [async () => undefined], byToken('x'))).rejects.toThrow(/gh auth login/);
+    await expect(findUpdateWithTokens('0.2.0', [async () => 'a'], byToken('x'))).rejects.toThrow(/Contents \(read\)/);
   });
 });
