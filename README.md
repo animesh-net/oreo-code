@@ -9,6 +9,7 @@ Part of the Oreo stack: [oreo-ai](https://github.com/animesh-net/oreo-ai) · [or
 - Mac models (`Oreo 4B`, `Oreo 2B`) are called straight on Ollama at `oreo.ollamaUrl`; no sign-in, no server in between.
 - Cloudflare models (`Oreo 30B`, `Oreo 120B`) go through oreo-ai's relay on the Pi at `oreo.cloudUrl`, over Tailscale only; the Pi holds the token. Nothing leaves the Mac unless you pick one.
 - Models with tools can read the open workspace (list, search, read; secret files refused). A local `github-mcp-server` over stdio is set up for the coding agent to come; its writes will need approval.
+- Each message carries the repo's file list and the open file; replies are length-capped and earlier answers go back shortened, so follow-ups answer only what's new.
 - Every merge to `main` publishes a VSIX release; the extension updates itself from it.
 
 | Path               | What it is                          |
