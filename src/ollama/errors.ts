@@ -1,8 +1,11 @@
-import { APIConnectionError, APIError, APIUserAbortError } from 'openai';
+import { APIConnectionError, APIConnectionTimeoutError, APIError, APIUserAbortError } from 'openai';
 
 /** Turns an Ollama failure into one short sentence for the chat view. */
 export function describeOllamaError(err: unknown, ollamaUrl: string, model?: string): string {
   if (err instanceof APIUserAbortError) return 'Stopped.';
+  if (err instanceof APIConnectionTimeoutError) {
+    return "Ollama didn't start answering within 10 minutes. The Mac may be short of memory: try Thinking off, Oreo 2B or a new chat.";
+  }
   if (err instanceof APIConnectionError) return unreachable(ollamaUrl);
   const status = statusOf(err);
   const detail = serverMessage(err);
@@ -22,6 +25,7 @@ export function describeOllamaError(err: unknown, ollamaUrl: string, model?: str
 
 /** Nothing answered at the address: Ollama isn't running or listens elsewhere. */
 export function isUnreachable(err: unknown): boolean {
+  if (err instanceof APIConnectionTimeoutError) return false;
   return err instanceof APIConnectionError || (statusOf(err) === undefined && isNetworkError(err));
 }
 
