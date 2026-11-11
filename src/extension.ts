@@ -8,7 +8,8 @@ import { McpHost } from './mcp/host';
 import { stdioConnect } from './mcp/stdioConnect';
 import { OllamaClient } from './ollama/client';
 import { tailscaleOllamaUrls } from './ollama/url';
-import { downloadRelease, findUpdate, RELEASES_REPO } from './update/releases';
+import { ghCliToken } from './auth/ghCliToken';
+import { downloadRelease, findUpdateWithTokens } from './update/releases';
 import type { ReasoningEffort, ViewState } from './shared/protocol';
 import { ChatViewProvider } from './views/chatViewProvider';
 import { currentWorkspace } from './workspace/vscodeWorkspace';
@@ -94,19 +95,12 @@ export function activate(context: vscode.ExtensionContext): void {
   // Updates: each main build is a release (v0.2.0, v0.2.1, ...). The repository is
   // private, so the check uses the GitHub token from the Keychain.
   let installedUpdate: string | undefined;
+  let warnedAboutUpdates = false;
   const checkForUpdates = async (manual: boolean) => {
     if (!manual && !config().get<boolean>('autoUpdate', true)) return;
-    const token = await githubTokens.get();
-    if (!token) {
-      if (manual) {
-        void vscode.window.showWarningMessage(
-          `Set a GitHub token with Contents (read) on ${RELEASES_REPO} to check for updates.`,
-        );
-      }
-      return;
-    }
     try {
-      const release = await findUpdate(version, token);
+      // The Keychain token first, then the GitHub CLI's sign-in, as the repository is private.
+      const { release, token } = await findUpdateWithTokens(version, [() => githubTokens.get(), ghCliToken]);
       if (!release || release.version === installedUpdate) {
         if (manual) {
           void vscode.window.showInformationMessage(
@@ -132,7 +126,9 @@ export function activate(context: vscode.ExtensionContext): void {
     } catch (err) {
       const message = `Update check failed: ${(err as Error).message}`;
       output.appendLine(message);
-      if (manual) void vscode.window.showErrorMessage(message);
+      // An automatic check says why it failed once per session, then only logs.
+      if (manual || !warnedAboutUpdates) void vscode.window.showErrorMessage(message);
+      warnedAboutUpdates = true;
     }
   };
   const firstCheck = setTimeout(() => void checkForUpdates(false), 15_000);

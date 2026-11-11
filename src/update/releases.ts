@@ -79,3 +79,36 @@ export async function downloadRelease(
     throw new ReleaseCheckError(res.status, `GitHub answered ${res.status} when downloading ${release.assetName}.`);
   return new Uint8Array(await res.arrayBuffer());
 }
+
+/**
+ * Tries each token source in turn (the Keychain token, then the GitHub CLI's) and
+ * returns the first answer. A source with no token is skipped; a token GitHub
+ * refuses (401, 403, 404) moves on to the next. With no usable token at all, throws
+ * the last refusal, or says that no token is set.
+ */
+export async function findUpdateWithTokens(
+  current: string,
+  sources: (() => Promise<string | undefined>)[],
+  fetchImpl: FetchLike = fetch,
+): Promise<{ release: Release | undefined; token: string }> {
+  let refused: ReleaseCheckError | undefined;
+  for (const source of sources) {
+    const token = await source();
+    if (!token) continue;
+    try {
+      return { release: await findUpdate(current, token, fetchImpl), token };
+    } catch (err) {
+      if (err instanceof ReleaseCheckError && [401, 403, 404].includes(err.status)) {
+        refused = err;
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw (
+    refused ??
+    new Error(
+      `No GitHub token to check for updates. Run "Oreo Code: Set GitHub token", or sign in with "gh auth login".`,
+    )
+  );
+}
