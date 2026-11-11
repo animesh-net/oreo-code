@@ -71,6 +71,11 @@
           "command": "oreo.newChat",
           "when": "view == oreo.chat",
           "group": "navigation"
+        },
+        {
+          "command": "oreo.checkForUpdates",
+          "when": "view == oreo.chat",
+          "group": "9_update"
         }
       ]
     },
