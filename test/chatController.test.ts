@@ -102,18 +102,18 @@ describe('ChatController', () => {
         return fakeClient(
           () => chunks(),
           async () => {
-            if (url === 'http://100.70.213.221:11434') return models;
+            if (url === 'http://100.100.10.20:11434') return models;
             throw refused;
           },
         );
       },
-      fallbackOllamaUrls: () => ['http://100.101.0.9:11434', 'http://100.70.213.221:11434'],
+      fallbackOllamaUrls: () => ['http://100.101.0.9:11434', 'http://100.100.10.20:11434'],
       post: () => {},
     });
     await controller.refresh();
-    expect(tried).toEqual(['http://127.0.0.1:11434', 'http://100.101.0.9:11434', 'http://100.70.213.221:11434']);
+    expect(tried).toEqual(['http://127.0.0.1:11434', 'http://100.101.0.9:11434', 'http://100.100.10.20:11434']);
     expect(controller.state).toMatchObject({
-      ollamaUrl: 'http://100.70.213.221:11434',
+      ollamaUrl: 'http://100.100.10.20:11434',
       selectedModel: 'oreo-4b',
       error: undefined,
     });
@@ -128,7 +128,7 @@ describe('ChatController', () => {
           throw refused;
         },
       ),
-      { fallbackOllamaUrls: () => ['http://100.70.213.221:11434'] },
+      { fallbackOllamaUrls: () => ['http://100.100.10.20:11434'] },
     );
     await controller.refresh();
     expect(controller.state.ollamaUrl).toBe('http://127.0.0.1:11434');
@@ -139,7 +139,7 @@ describe('ChatController', () => {
     let asked = 0;
     const fallbackOllamaUrls = () => {
       asked++;
-      return ['http://100.70.213.221:11434'];
+      return ['http://100.100.10.20:11434'];
     };
     const refused = Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNREFUSED' } });
     await setup(

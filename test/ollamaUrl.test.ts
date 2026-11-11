@@ -29,12 +29,12 @@ describe('tailscaleOllamaUrls', () => {
         { address: 'fe80::1', family: 'IPv6', internal: false },
       ],
       utun4: [
-        { address: '100.70.213.221', family: 'IPv4', internal: false },
+        { address: '100.100.10.20', family: 'IPv4', internal: false },
         { address: 'fd7a:115c:a1e0::1', family: 'IPv6', internal: false },
       ],
     };
-    expect(tailscaleOllamaUrls('http://127.0.0.1:11434', interfaces)).toEqual(['http://100.70.213.221:11434']);
-    expect(tailscaleOllamaUrls('http://localhost:9999', interfaces)).toEqual(['http://100.70.213.221:9999']);
+    expect(tailscaleOllamaUrls('http://127.0.0.1:11434', interfaces)).toEqual(['http://100.100.10.20:11434']);
+    expect(tailscaleOllamaUrls('http://localhost:9999', interfaces)).toEqual(['http://100.100.10.20:9999']);
   });
 
   it('ignores addresses outside 100.64.0.0/10', () => {
@@ -50,6 +50,6 @@ describe('tailscaleOllamaUrls', () => {
   it('treats only local addresses as loopback', () => {
     expect(isLoopbackUrl('http://127.0.0.1:11434')).toBe(true);
     expect(isLoopbackUrl('http://localhost:11434')).toBe(true);
-    expect(isLoopbackUrl('http://100.70.213.221:11434')).toBe(false);
+    expect(isLoopbackUrl('http://100.100.10.20:11434')).toBe(false);
   });
 });
