@@ -112,3 +112,20 @@ export async function findUpdateWithTokens(
     )
   );
 }
+
+/**
+ * Words anything that was thrown: an Error's message (or its name), a string as it
+ * is, anything else as JSON. VS Code commands can reject with a bare string.
+ */
+export function describeError(err: unknown): string {
+  if (err instanceof Error) return err.message || err.name || 'unknown error';
+  if (typeof err === 'string') return err || 'unknown error';
+  if (err && typeof err === 'object' && typeof (err as { message?: unknown }).message === 'string') {
+    return (err as { message: string }).message;
+  }
+  try {
+    return JSON.stringify(err) ?? String(err);
+  } catch {
+    return String(err);
+  }
+}

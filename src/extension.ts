@@ -1,4 +1,6 @@
+import { execFile } from 'node:child_process';
 import * as os from 'node:os';
+import * as path from 'node:path';
 import * as vscode from 'vscode';
 import { GithubTokenStore, validateGithubTokenShape } from './auth/githubToken';
 import { ChatController } from './chat/chatController';
@@ -11,7 +13,7 @@ import { tailscaleOllamaUrls } from './ollama/url';
 import { CloudflareTokenStore, validateCloudflareTokenShape } from './auth/cloudflareToken';
 import { ghCliToken } from './auth/ghCliToken';
 import { CloudflareClient } from './cloudflare/client';
-import { downloadRelease, findUpdateWithTokens } from './update/releases';
+import { describeError, downloadRelease, findUpdateWithTokens } from './update/releases';
 import type { ReasoningEffort, ViewState } from './shared/protocol';
 import { ChatViewProvider } from './views/chatViewProvider';
 import { currentWorkspace } from './workspace/vscodeWorkspace';
@@ -109,6 +111,7 @@ export function activate(context: vscode.ExtensionContext): void {
   let warnedAboutUpdates = false;
   const checkForUpdates = async (manual: boolean) => {
     if (!manual && !config().get<boolean>('autoUpdate', true)) return;
+    let step = 'checking for a newer release';
     try {
       // The Keychain token first, then the GitHub CLI's sign-in, as the repository is private.
       const { release, token } = await findUpdateWithTokens(version, [() => githubTokens.get(), ghCliToken]);
@@ -122,21 +125,33 @@ export function activate(context: vscode.ExtensionContext): void {
         }
         return;
       }
+      step = `downloading ${release.assetName}`;
       const bytes = await downloadRelease(release, token);
+      step = 'saving the download';
       const dir = vscode.Uri.joinPath(context.globalStorageUri, 'updates');
       await vscode.workspace.fs.createDirectory(dir);
       const file = vscode.Uri.joinPath(dir, release.assetName);
       await vscode.workspace.fs.writeFile(file, bytes);
-      await vscode.commands.executeCommand('workbench.extensions.installExtension', file);
+      step = `installing ${release.version}`;
+      try {
+        await vscode.commands.executeCommand('workbench.extensions.installExtension', file);
+      } catch (err) {
+        // VS Code's own command can fail with a bare string; its CLI, inside the app
+        // (not on PATH), installs a VSIX the same way the manual install does.
+        output.appendLine(`installExtension failed (${describeError(err)}); trying the code CLI`);
+        await installWithCli(file.fsPath);
+      }
       installedUpdate = release.version;
+      output.appendLine(`Installed Oreo Code ${release.version}.`);
       const choice = await vscode.window.showInformationMessage(
         `Oreo Code ${release.version} is installed. Reload to use it.`,
         'Reload',
       );
       if (choice) await vscode.commands.executeCommand('workbench.action.reloadWindow');
     } catch (err) {
-      const message = `Update check failed: ${(err as Error).message}`;
+      const message = `Update failed while ${step}: ${describeError(err)}`;
       output.appendLine(message);
+      if (err instanceof Error && err.stack) output.appendLine(err.stack);
       // An automatic check says why it failed once per session, then only logs.
       if (manual || !warnedAboutUpdates) void vscode.window.showErrorMessage(message);
       warnedAboutUpdates = true;
@@ -218,4 +233,14 @@ function updateStatus(item: vscode.StatusBarItem, state: ViewState): void {
   const model = state.models.find((m) => m.id === state.selectedModel);
   item.text = state.busy ? '$(sync~spin) Oreo Code' : `$(comment-discussion) ${model?.name ?? 'Oreo Code'}`;
   item.tooltip = `Ollama at ${state.ollamaUrl}`;
+}
+
+/** Installs a VSIX with the `code` CLI that ships inside VS Code. */
+function installWithCli(vsixPath: string): Promise<void> {
+  const cli = path.join(vscode.env.appRoot, 'bin', process.platform === 'win32' ? 'code.cmd' : 'code');
+  return new Promise((resolve, reject) => {
+    execFile(cli, ['--install-extension', vsixPath, '--force'], { timeout: 120_000 }, (err, _stdout, stderr) =>
+      err ? reject(new Error(stderr.trim() || err.message)) : resolve(),
+    );
+  });
 }
