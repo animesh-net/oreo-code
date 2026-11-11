@@ -104,10 +104,10 @@ fix/<name_fix>` from it, push the new name, then ask before deleting the old
 # This repo
 
 oreo-code is a VS Code extension that chats with the Oreo models on the Mac's own
-Ollama. All work runs on the Mac, inside this extension: it calls Ollama directly
+Ollama and, with a Cloudflare token, two Workers AI models. It calls Ollama directly
 (`GET /api/tags` for the model list, `POST /v1/chat/completions` streamed over
-SSE) at the `oreo.ollamaUrl` setting. The oreo-ai server is not used: no API
-token, no sign-in. The models are created from the Modelfiles in oreo-ai's
+SSE) at the `oreo.ollamaUrl` setting, and Workers AI's `/ai/v1/chat/completions`
+directly. The oreo-ai server is not used: no sign-in. The models are created from the Modelfiles in oreo-ai's
 `ollama/` folder. The plan: sidebar chat and a local `github-mcp-server` over
 stdio (now), then an agent loop with approval cards, and local workspace tools.
 
@@ -116,6 +116,7 @@ stdio (now), then an agent loop with approval cards, and local workspace tools.
 | `src/extension.ts`            | `activate()`: commands, sidebar view, status bar                                               |
 | `src/auth/`                   | Secrets in VS Code SecretStorage (the macOS Keychain)                                          |
 | `src/ollama/`                 | Ollama client (OpenAI-compatible), the fixed model list, URL check and error wording           |
+| `src/cloudflare/`             | Workers AI client (thinking per model, `<think>` filter) and its error wording                 |
 | `src/chat/`                   | Chat state and turns; no `vscode` imports, unit tested                                         |
 | `src/views/`                  | Webview host, CSP, message relay                                                               |
 | `src/mcp/`                    | Pinned `github-mcp-server` download, MCP host and stdio client                                 |
@@ -135,15 +136,18 @@ stdio (now), then an agent loop with approval cards, and local workspace tools.
   Never log it, put it in settings or send it to Ollama.
   `src/auth/ghCliToken.ts` reads the GitHub CLI's token, used only for the release
   check and download in `src/update/`.
-- **Model output is untrusted.** The webview renders it as plain text. Keep the
-  CSP in `src/views/chatViewProvider.ts` strict: no inline scripts, no remote
-  content, no `unsafe-eval`. If Markdown rendering is added, raw HTML stays off
-  and links are limited to http and https.
+- **Model output is untrusted.** The webview renders replies as Markdown only through
+  `webview-ui/markdown.ts`: raw HTML off, images off, links limited to http and
+  https. Keep the CSP in `src/views/chatViewProvider.ts` strict: no inline scripts,
+  no remote content, no `unsafe-eval`.
+- **Cloudflare is opt-in.** Nothing goes to Workers AI unless a Cloudflare model is
+  picked; its token lives only in `src/auth/cloudflareToken.ts` (SecretStorage) and
+  is sent only to api.cloudflare.com.
 - **Models are named once** in `src/ollama/models.ts` (`OREO_MODELS`); no model id
   anywhere else and no model editing. Ollama's `GET /api/tags` only marks which
   are installed. The extension only offers a dropdown; agent mode uses only
   models with `supportsTools: true`.
-- **Testable core.** `src/chat/`, `src/ollama/`, `src/mcp/`, `src/agent/` and `src/update/` have no `vscode` imports; VS
+- **Testable core.** `src/chat/`, `src/ollama/`, `src/cloudflare/`, `src/mcp/`, `src/agent/` and `src/update/` have no `vscode` imports; VS
   Code wiring goes in `src/extension.ts`, `src/views/`, `src/auth/` and `src/workspace/`.
 - **Agent safety lives in code.** Only the write tools in `ALLOWED_WRITES`
   (`src/agent/catalog.ts`) are offered; a tool without `readOnlyHint: true` is a

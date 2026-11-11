@@ -1,8 +1,8 @@
 // Messages between the extension host and the chat webview.
 // Shared by both bundles, so keep this file free of Node and DOM imports.
 
-/** Where a model runs: the MacBook's Ollama. */
-export type ModelProvider = 'macbook';
+/** Where a model runs: the MacBook's Ollama, or Cloudflare Workers AI. */
+export type ModelProvider = 'macbook' | 'cloudflare';
 
 /**
  * How a model can think. "switch": only on or off (Off / On in the menu); Ollama
@@ -17,6 +17,8 @@ export interface ModelInfo {
   provider: ModelProvider;
   supportsTools: boolean;
   thinking: ThinkingStyle;
+  /** The prompt is kept under this many characters, to fit the model's context window. */
+  maxPromptChars: number;
   /** False when Ollama doesn't have the model installed. */
   available: boolean;
 }

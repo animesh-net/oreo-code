@@ -63,6 +63,16 @@
         "command": "oreo.checkForUpdates",
         "title": "Check for updates",
         "category": "Oreo Code"
+      },
+      {
+        "command": "oreo.setCloudflareToken",
+        "title": "Set Cloudflare token",
+        "category": "Oreo Code"
+      },
+      {
+        "command": "oreo.clearCloudflareToken",
+        "title": "Clear Cloudflare token",
+        "category": "Oreo Code"
       }
     ],
     "menus": {
@@ -96,6 +106,11 @@
           "type": "boolean",
           "default": true,
           "markdownDescription": "Install new Oreo Code releases from GitHub on its own (at start-up and every 6 hours), then offer a reload. Uses the GitHub token from `Oreo Code: Set GitHub token`, which needs Contents (read) on `animesh-net/oreo-code`."
+        },
+        "oreo.cloudflare.accountId": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Cloudflare account id for the Workers AI models (Qwen3 30B, gpt-oss 120B). With `Oreo Code: Set Cloudflare token` they appear next to the Mac's models; what you send them leaves the Mac."
         }
       }
     }
@@ -113,10 +128,12 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",
+    "markdown-it": "^14.3.3",
     "openai": "^7.55.0",
     "preact": "^11.2.0"
   },
   "devDependencies": {
+    "@types/markdown-it": "^14.2.0",
     "@types/node": "^26.6.6",
     "@types/vscode": "~1.100.0",
     "@vscode/vsce": "^4.1.0",

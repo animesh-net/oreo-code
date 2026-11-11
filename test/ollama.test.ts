@@ -22,10 +22,12 @@ function sseResponse(chunks: string[]): Response {
 }
 
 describe('OREO_MODELS', () => {
-  it('offers oreo-4b with tools and oreo-2b without, both on the MacBook', () => {
-    expect(OREO_MODELS).toEqual([
-      { id: 'oreo-4b', name: 'Oreo 4B', provider: 'macbook', supportsTools: true, thinking: 'switch' },
-      { id: 'oreo-2b', name: 'Oreo 2B', provider: 'macbook', supportsTools: false, thinking: 'switch' },
+  it('offers two models on the Mac and two on Workers AI, the Mac first', () => {
+    expect(OREO_MODELS.map((m) => [m.id, m.provider, m.supportsTools, m.thinking, m.maxPromptChars])).toEqual([
+      ['oreo-4b', 'macbook', true, 'switch', 72_000],
+      ['oreo-2b', 'macbook', false, 'switch', 72_000],
+      ['@cf/qwen/qwen3-30b-a3b-fp8', 'cloudflare', true, 'switch', 72_000],
+      ['@cf/openai/gpt-oss-120b', 'cloudflare', true, 'levels', 200_000],
     ]);
   });
 });
@@ -105,25 +107,26 @@ describe('OllamaClient', () => {
 
   // Every level on both models goes out unchanged; Ollama turns any level but "none"
   // into thinking on for qwen3.5.
-  it.each(OREO_MODELS.flatMap((m) => (['none', 'low', 'medium', 'high'] as const).map((e) => [m.id, e] as const)))(
-    'sends %s the effort %s as reasoning_effort',
-    async (model, effort) => {
-      let body: { model?: string; reasoning_effort?: string } = {};
-      const client = new OllamaClient(ollama, async (_input, init) => {
-        body = JSON.parse(String(init?.body));
-        return sseResponse(['ok']);
-      });
-      for await (const _ of client.streamChat(
-        model,
-        [{ role: 'user', content: 'hi' }],
-        new AbortController().signal,
-        effort,
-      )) {
-        // drain
-      }
-      expect(body).toMatchObject({ model, reasoning_effort: effort });
-    },
-  );
+  it.each(
+    OREO_MODELS.filter((m) => m.provider === 'macbook').flatMap((m) =>
+      (['none', 'low', 'medium', 'high'] as const).map((e) => [m.id, e] as const),
+    ),
+  )('sends %s the effort %s as reasoning_effort', async (model, effort) => {
+    let body: { model?: string; reasoning_effort?: string } = {};
+    const client = new OllamaClient(ollama, async (_input, init) => {
+      body = JSON.parse(String(init?.body));
+      return sseResponse(['ok']);
+    });
+    for await (const _ of client.streamChat(
+      model,
+      [{ role: 'user', content: 'hi' }],
+      new AbortController().signal,
+      effort,
+    )) {
+      // drain
+    }
+    expect(body).toMatchObject({ model, reasoning_effort: effort });
+  });
 });
 
 describe('tool calls', () => {
