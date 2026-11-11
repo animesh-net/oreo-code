@@ -66,6 +66,8 @@ export type ChatRole = 'user' | 'assistant';
 export interface ChatMessage {
   role: ChatRole;
   content: string;
+  /** What the model looked at while answering, e.g. "Read src/extension.ts". */
+  activity?: string[];
 }
 
 export interface ViewState {
@@ -83,6 +85,8 @@ export interface ViewState {
 export type ToWebview =
   | { type: 'state'; state: ViewState }
   | { type: 'delta'; text: string }
+  /** A tool ran while the reply is being written. */
+  | { type: 'activity'; text: string }
   /** A turn failed: show the error and put the user's text back in the input. */
   | { type: 'failed'; message: string; draft: string };
 

@@ -8,8 +8,10 @@ import { McpHost } from './mcp/host';
 import { stdioConnect } from './mcp/stdioConnect';
 import { OllamaClient } from './ollama/client';
 import { tailscaleOllamaUrls } from './ollama/url';
+import { downloadRelease, findUpdate, RELEASES_REPO } from './update/releases';
 import type { ReasoningEffort, ViewState } from './shared/protocol';
 import { ChatViewProvider } from './views/chatViewProvider';
+import { currentWorkspace } from './workspace/vscodeWorkspace';
 
 const LAST_MODEL_KEY = 'oreo.lastModel';
 // Kept from when effort was remembered per provider, so an earlier pick for the Mac's models carries over.
@@ -33,6 +35,7 @@ export function activate(context: vscode.ExtensionContext): void {
     rememberEffort: (effort) => void context.globalState.update(EFFORT_KEY, effort),
     createClient: (ollamaUrl) => new OllamaClient(ollamaUrl),
     fallbackOllamaUrls: (ollamaUrl) => tailscaleOllamaUrls(ollamaUrl, os.networkInterfaces()),
+    getWorkspace: currentWorkspace,
     post: (message) => view.post(message),
     onState: (state) => updateStatus(status, state),
   });
@@ -41,7 +44,7 @@ export function activate(context: vscode.ExtensionContext): void {
   // GitHub tools: github-mcp-server runs on this Mac as a child process, with the
   // GitHub token from the Keychain. It starts on first use, not at activation.
   const githubTokens = new GithubTokenStore(context.secrets);
-  const output = vscode.window.createOutputChannel('Oreo');
+  const output = vscode.window.createOutputChannel('Oreo Code');
   const version = (context.extension.packageJSON as { version?: string }).version ?? '0.0.0';
   const host = new McpHost(async () => {
     const token = await githubTokens.get();
@@ -55,7 +58,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   const setGithubToken = async () => {
     const token = await vscode.window.showInputBox({
-      title: 'Oreo: Set GitHub token',
+      title: 'Oreo Code: Set GitHub token',
       prompt:
         'Paste a fine-grained GitHub token with Contents and Pull requests (read and write) on the repos the agent may use.',
       password: true,
@@ -88,7 +91,56 @@ export function activate(context: vscode.ExtensionContext): void {
     output.show(true);
   };
 
+  // Updates: each main build is a release (v0.2.0, v0.2.1, ...). The repository is
+  // private, so the check uses the GitHub token from the Keychain.
+  let installedUpdate: string | undefined;
+  const checkForUpdates = async (manual: boolean) => {
+    if (!manual && !config().get<boolean>('autoUpdate', true)) return;
+    const token = await githubTokens.get();
+    if (!token) {
+      if (manual) {
+        void vscode.window.showWarningMessage(
+          `Set a GitHub token with Contents (read) on ${RELEASES_REPO} to check for updates.`,
+        );
+      }
+      return;
+    }
+    try {
+      const release = await findUpdate(version, token);
+      if (!release || release.version === installedUpdate) {
+        if (manual) {
+          void vscode.window.showInformationMessage(
+            installedUpdate
+              ? `Oreo Code ${installedUpdate} is installed; reload the window to use it.`
+              : `Oreo Code ${version} is the newest version.`,
+          );
+        }
+        return;
+      }
+      const bytes = await downloadRelease(release, token);
+      const dir = vscode.Uri.joinPath(context.globalStorageUri, 'updates');
+      await vscode.workspace.fs.createDirectory(dir);
+      const file = vscode.Uri.joinPath(dir, release.assetName);
+      await vscode.workspace.fs.writeFile(file, bytes);
+      await vscode.commands.executeCommand('workbench.extensions.installExtension', file);
+      installedUpdate = release.version;
+      const choice = await vscode.window.showInformationMessage(
+        `Oreo Code ${release.version} is installed. Reload to use it.`,
+        'Reload',
+      );
+      if (choice) await vscode.commands.executeCommand('workbench.action.reloadWindow');
+    } catch (err) {
+      const message = `Update check failed: ${(err as Error).message}`;
+      output.appendLine(message);
+      if (manual) void vscode.window.showErrorMessage(message);
+    }
+  };
+  const firstCheck = setTimeout(() => void checkForUpdates(false), 15_000);
+  const laterChecks = setInterval(() => void checkForUpdates(false), 6 * 60 * 60 * 1000);
+
   context.subscriptions.push(
+    { dispose: () => (clearTimeout(firstCheck), clearInterval(laterChecks)) },
+    vscode.commands.registerCommand('oreo.checkForUpdates', () => checkForUpdates(true)),
     status,
     vscode.window.registerWebviewViewProvider(ChatViewProvider.viewId, view, {
       webviewOptions: { retainContextWhenHidden: true },
@@ -123,11 +175,11 @@ export async function deactivate(): Promise<void> {
 
 function updateStatus(item: vscode.StatusBarItem, state: ViewState): void {
   if (state.error) {
-    item.text = '$(warning) Oreo';
+    item.text = '$(warning) Oreo Code';
     item.tooltip = state.error;
     return;
   }
   const model = state.models.find((m) => m.id === state.selectedModel);
-  item.text = state.busy ? '$(sync~spin) Oreo' : `$(comment-discussion) ${model?.name ?? 'Oreo'}`;
+  item.text = state.busy ? '$(sync~spin) Oreo Code' : `$(comment-discussion) ${model?.name ?? 'Oreo Code'}`;
   item.tooltip = `Ollama at ${state.ollamaUrl}`;
 }

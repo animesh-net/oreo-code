@@ -27,6 +27,7 @@ function App() {
   const saved = (vscode.getState() as Saved | undefined) ?? {};
   const [state, setState] = useState<ViewState>(emptyState);
   const [streaming, setStreaming] = useState('');
+  const [activity, setActivity] = useState<string[]>([]);
   const [draft, setDraft] = useState(saved.draft ?? '');
   const [menuOpen, setMenuOpen] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
@@ -37,10 +38,16 @@ function App() {
       switch (msg.type) {
         case 'state':
           setState(msg.state);
-          if (!msg.state.busy) setStreaming('');
+          if (!msg.state.busy) {
+            setStreaming('');
+            setActivity([]);
+          }
           break;
         case 'delta':
           setStreaming((s) => s + msg.text);
+          break;
+        case 'activity':
+          setActivity((a) => [...a, msg.text]);
           break;
         case 'failed':
           setDraft((d) => (d.trim() ? d : msg.draft));
@@ -78,7 +85,7 @@ function App() {
         {state.messages.map((m, i) => (
           <Bubble key={i} message={m} />
         ))}
-        {state.busy && <Bubble message={{ role: 'assistant', content: streaming }} pending />}
+        {state.busy && <Bubble message={{ role: 'assistant', content: streaming, activity }} pending />}
       </div>
 
       {state.error && (
@@ -96,7 +103,7 @@ function App() {
       <footer class="composer">
         <textarea
           aria-label="Message"
-          placeholder="Message Oreo"
+          placeholder="Message Oreo Code"
           rows={2}
           value={draft}
           onInput={(e) => setDraft(e.currentTarget.value)}
@@ -182,7 +189,14 @@ function App() {
 function Bubble({ message, pending }: { message: ChatMessage; pending?: boolean }) {
   return (
     <div class={`bubble ${message.role}`}>
-      <div class="role">{message.role === 'user' ? 'You' : 'Oreo'}</div>
+      <div class="role">{message.role === 'user' ? 'You' : 'Oreo Code'}</div>
+      {!!message.activity?.length && (
+        <ul class="activity">
+          {message.activity.map((a, i) => (
+            <li key={i}>{a}</li>
+          ))}
+        </ul>
+      )}
       {/* Rendered as plain text on purpose: model output is untrusted. */}
       <div class="content">{message.content || (pending ? '…' : '')}</div>
     </div>

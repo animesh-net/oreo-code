@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { ChatController, pickModel, type ChatControllerDeps } from '../src/chat/chatController';
-import type { ModelClient } from '../src/ollama/client';
+import { ChatController, MAX_TOOL_ROUNDS, pickModel, type ChatControllerDeps } from '../src/chat/chatController';
+import type { Workspace } from '../src/agent/workspaceTools';
+import type { FunctionTool, ModelClient, StreamEvent, WireMessage } from '../src/ollama/client';
 import { OllamaHttpError } from '../src/ollama/errors';
 import type { ChatMessage, ModelInfo, ToWebview } from '../src/shared/protocol';
 
@@ -20,9 +21,14 @@ function fakeClient(
     listModels: list,
     streamChat: (_model, messages, signal, effort) => {
       efforts.push(effort);
-      return stream(messages, signal);
+      const chat = messages.filter((m): m is ChatMessage => m.role === 'user' || m.role === 'assistant');
+      return texts(stream(chat, signal));
     },
   };
+}
+
+async function* texts(parts: AsyncIterable<string>): AsyncIterable<StreamEvent> {
+  for await (const text of parts) yield { type: 'text', text };
 }
 
 function setup(client: ModelClient, overrides: Partial<ChatControllerDeps> = {}) {
@@ -325,5 +331,73 @@ describe('pickModel', () => {
   it('skips models Ollama does not have', () => {
     expect(pickModel(models, 'oreo-9b', 'oreo-9b')).toBe('oreo-4b');
     expect(pickModel(models, undefined, 'oreo-2b')).toBe('oreo-2b');
+  });
+});
+
+describe('repo context and tools', () => {
+  const ws: Workspace = {
+    name: 'oreo-code',
+    listFiles: async () => ['src/a.ts'],
+    readFile: async () => 'export const a = 1;',
+    branch: async () => 'main',
+    activeFile: () => undefined,
+  };
+
+  /** Plays one scripted round per call and records what each request carried. */
+  function scripted(rounds: (n: number) => StreamEvent[]) {
+    const requests: { messages: WireMessage[]; tools?: FunctionTool[] }[] = [];
+    const client: ModelClient = {
+      listModels: async () => models,
+      async *streamChat(_model, messages, _signal, _effort, tools) {
+        requests.push({ messages: [...messages], tools });
+        for (const e of rounds(requests.length)) yield e;
+      },
+    };
+    return { client, requests };
+  }
+
+  const readCall: StreamEvent = {
+    type: 'toolCalls',
+    calls: [{ id: 'c1', type: 'function', function: { name: 'read_file', arguments: '{"path":"src/a.ts"}' } }],
+  };
+
+  it('sends the repo snapshot and lets Oreo 4B read files before it answers', async () => {
+    const { client, requests } = scripted((n) => (n === 1 ? [readCall] : [{ type: 'text', text: 'a is 1.' }]));
+    const { controller, posted } = setup(client, { getWorkspace: () => ws });
+    await controller.refresh();
+    await controller.handle({ type: 'send', text: 'What is a?' });
+
+    expect(requests).toHaveLength(2);
+    const system = requests[0].messages[0];
+    expect(system.role).toBe('system');
+    expect(system.content).toContain('repository "oreo-code" on branch main');
+    expect(requests[0].tools?.map((t) => t.function.name)).toEqual(['list_files', 'read_file', 'search']);
+    expect(requests[1].messages.at(-1)).toMatchObject({ role: 'tool', tool_call_id: 'c1' });
+    expect(requests[1].messages.at(-1)?.content).toContain('1: export const a = 1;');
+    expect(posted).toContainEqual({ type: 'activity', text: 'Read src/a.ts' });
+    expect(controller.state.messages.at(-1)).toEqual({
+      role: 'assistant',
+      content: 'a is 1.',
+      activity: ['Read src/a.ts'],
+    });
+  });
+
+  it('gives Oreo 2B the snapshot but no tools', async () => {
+    const { client, requests } = scripted(() => [{ type: 'text', text: 'ok' }]);
+    const { controller } = setup(client, { getWorkspace: () => ws, getLastModel: () => 'oreo-2b' });
+    await controller.refresh();
+    await controller.handle({ type: 'send', text: 'hi' });
+    expect(requests[0].tools).toBeUndefined();
+    expect(requests[0].messages[0].content).toContain("You can't open files");
+  });
+
+  it(`stops offering tools after ${MAX_TOOL_ROUNDS} rounds so the model must answer`, async () => {
+    const { client, requests } = scripted((n) => (n < MAX_TOOL_ROUNDS ? [readCall] : [{ type: 'text', text: 'done' }]));
+    const { controller } = setup(client, { getWorkspace: () => ws });
+    await controller.refresh();
+    await controller.handle({ type: 'send', text: 'hi' });
+    expect(requests).toHaveLength(MAX_TOOL_ROUNDS);
+    expect(requests.at(-1)?.tools).toBeUndefined();
+    expect(controller.state.messages.at(-1)?.content).toBe('done');
   });
 });

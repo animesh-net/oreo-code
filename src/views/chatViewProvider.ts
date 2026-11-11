@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import type { ChatController } from '../chat/chatController';
 import type { FromWebview, ToWebview } from '../shared/protocol';
 
-/** Hosts the chat webview in the Oreo sidebar and relays messages to the controller. */
+/** Hosts the chat webview in the Oreo Code sidebar and relays messages to the controller. */
 export class ChatViewProvider implements vscode.WebviewViewProvider {
   static readonly viewId = 'oreo.chat';
   private view: vscode.WebviewView | undefined;
@@ -49,7 +49,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 <meta http-equiv="Content-Security-Policy" content="${csp}">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <link rel="stylesheet" href="${style}">
-<title>Oreo</title>
+<title>Oreo Code</title>
 </head>
 <body>
 <div id="root"></div>
