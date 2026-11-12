@@ -113,24 +113,26 @@ over Tailscale only; nothing else of oreo-ai is used: no sign-in. The models are
 `ollama/` folder. The plan: sidebar chat and a local `github-mcp-server` over
 stdio (now), then an agent loop with approval cards, and local workspace tools.
 
-| Path                          | What it is                                                                                     |
-| ----------------------------- | ---------------------------------------------------------------------------------------------- |
-| `src/extension.ts`            | `activate()`: commands, sidebar view, status bar                                               |
-| `src/auth/`                   | Secrets in VS Code SecretStorage (the macOS Keychain)                                          |
-| `src/ollama/`                 | Ollama client (OpenAI-compatible), the fixed model list, URL check and error wording           |
-| `src/cloudflare/`             | Workers AI client via oreo-ai's relay (model list, thinking, `<think>` filter), error wording  |
-| `src/chat/`                   | Chat state and turns; no `vscode` imports, unit tested                                         |
-| `src/views/`                  | Webview host, CSP, message relay                                                               |
-| `src/mcp/`                    | Pinned `github-mcp-server` download, MCP host and stdio client                                 |
-| `src/agent/`                  | Tool catalog (namespacing, read/write, allowlist) and the write policy                         |
-| `src/agent/workspaceTools.ts` | Read-only workspace tools (list, read, search); secret files refused                           |
-| `src/workspace/`              | The open folder for the snapshot and tools: files, unsaved text, branch, active editor         |
-| `src/update/`                 | Self-update: newest GitHub release, with a token if there is one, else none (public repo)      |
-| `src/shared/protocol.ts`      | Messages between the extension and the webview; both bundles compile with it                   |
-| `webview-ui/`                 | Preact chat UI, bundled to `dist/webview.js`                                                   |
-| `test/`                       | Vitest unit tests                                                                              |
-| `scripts/`                    | README link check and the PR description cleaner (shared with oreo-ai)                         |
-| `.github/workflows/`          | CI (a `v<major>.<minor>.<n>` release per main build), PR description cleaner, Dependabot merge |
+| Path                                | What it is                                                                                     |
+| ----------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `src/extension.ts`                  | `activate()`: commands, sidebar view, status bar                                               |
+| `src/auth/`                         | Secrets in VS Code SecretStorage (the macOS Keychain)                                          |
+| `src/ollama/`                       | Ollama client (OpenAI-compatible), the fixed model list, URL check and error wording           |
+| `src/cloudflare/`                   | Workers AI client via oreo-ai's relay (model list, thinking, `<think>` filter), error wording  |
+| `src/chat/`                         | Chat state and turns; no `vscode` imports, unit tested                                         |
+| `src/views/`                        | Webview host, CSP, message relay                                                               |
+| `src/mcp/`                          | Pinned `github-mcp-server` download, MCP host and stdio client                                 |
+| `src/agent/`                        | Tool catalog (namespacing, read/write, allowlist) and the write policy                         |
+| `src/agent/workspaceTools.ts`       | Read-only workspace tools (list, read, search); secret files refused                           |
+| `src/completion/`                   | Inline completion: repo snippets, symbol index, FIM prompt, budget, trimming; no `vscode`      |
+| `src/workspace/inlineCompletion.ts` | The inline completion provider, symbol-index watcher and completion status bar item            |
+| `src/workspace/`                    | The open folder for the snapshot and tools: files, unsaved text, branch, active editor         |
+| `src/update/`                       | Self-update: newest GitHub release, with a token if there is one, else none (public repo)      |
+| `src/shared/protocol.ts`            | Messages between the extension and the webview; both bundles compile with it                   |
+| `webview-ui/`                       | Preact chat UI, bundled to `dist/webview.js`                                                   |
+| `test/`                             | Vitest unit tests                                                                              |
+| `scripts/`                          | README link check and the PR description cleaner (shared with oreo-ai)                         |
+| `.github/workflows/`                | CI (a `v<major>.<minor>.<n>` release per main build), PR description cleaner, Dependabot merge |
 
 ## Rules for the code
 
@@ -156,7 +158,13 @@ stdio (now), then an agent loop with approval cards, and local workspace tools.
   `src/OreoAi.Web/Models/OreoModels.cs`): same ids, labels and order — largest
   first. Any model added, removed or renamed here must be changed there in the same
   way, and the other way round.
-- **Testable core.** `src/chat/`, `src/ollama/`, `src/cloudflare/`, `src/mcp/`, `src/agent/` and `src/update/` have no `vscode` imports; VS
+- **Completion stays on the Mac.** Inline completion uses only the model with
+  `completion: true` (`completionModel()`) on the Mac's Ollama, never oreo-ai or
+  Cloudflare. It reads only listed files, never secret files (`isSecretPath`) or
+  files the root `.gitignore` ignores, in snippets and the symbol index alike. Its
+  size limits live only in `src/completion/budget.ts`; the prompt follows
+  Qwen2.5-Coder's repository-level fill-in-the-middle format.
+- **Testable core.** `src/chat/`, `src/ollama/`, `src/cloudflare/`, `src/mcp/`, `src/agent/`, `src/completion/` and `src/update/` have no `vscode` imports; VS
   Code wiring goes in `src/extension.ts`, `src/views/`, `src/auth/` and `src/workspace/`.
 - **Agent safety lives in code.** Only the write tools in `ALLOWED_WRITES`
   (`src/agent/catalog.ts`) are offered; a tool without `readOnlyHint: true` is a

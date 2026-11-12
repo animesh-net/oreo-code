@@ -52,7 +52,7 @@ export const OREO_MODELS: readonly Omit<ModelInfo, 'available'>[] = [
   },
   // qwen2.5-coder base, made for code completion, with an 8K context: it can't think or
   // use tools, so it is never picked unless you choose it. The budget leaves 4K tokens
-  // for the reply.
+  // for the reply. It also writes the inline completions (src/completion/).
   {
     id: 'oreo-1.5b',
     name: 'Oreo 1.5B',
@@ -60,8 +60,16 @@ export const OREO_MODELS: readonly Omit<ModelInfo, 'available'>[] = [
     supportsTools: false,
     thinking: 'none',
     maxPromptChars: 10_000,
+    completion: true,
   },
 ];
+
+/** The Mac model that writes inline completions. */
+export function completionModel(): Omit<ModelInfo, 'available'> {
+  const model = OREO_MODELS.find((m) => m.completion);
+  if (!model) throw new Error('No completion model in OREO_MODELS.');
+  return model;
+}
 
 /** Puts models in OREO_MODELS's order, largest first, wherever they were listed from; others last. */
 export function inCatalogOrder(models: ModelInfo[]): ModelInfo[] {

@@ -15,6 +15,7 @@ import { CloudflareClient } from './cloudflare/client';
 import { describeError, downloadRelease, findUpdateWithTokens } from './update/releases';
 import type { ReasoningEffort, ViewState } from './shared/protocol';
 import { ChatViewProvider } from './views/chatViewProvider';
+import { registerInlineCompletion } from './workspace/inlineCompletion';
 import { currentWorkspace } from './workspace/vscodeWorkspace';
 
 const LAST_MODEL_KEY = 'oreo.lastModel';
@@ -30,6 +31,9 @@ export function activate(context: vscode.ExtensionContext): void {
   status.show();
 
   const config = () => vscode.workspace.getConfiguration('oreo');
+  // The chat's latest state also tells completion where Ollama answers and what it has.
+  let latestState: ViewState | undefined;
+  const stateChanged = new vscode.EventEmitter<void>();
 
   const controller = new ChatController({
     getOllamaUrl: () => config().get<string>('ollamaUrl', ''),
@@ -44,9 +48,14 @@ export function activate(context: vscode.ExtensionContext): void {
     getCloudUrl: () => config().get<string>('cloudUrl', ''),
     createCloudClient: (cloudUrl) => new CloudflareClient(cloudUrl),
     post: (message) => view.post(message),
-    onState: (state) => updateStatus(status, state),
+    onState: (state) => {
+      latestState = state;
+      updateStatus(status, state);
+      stateChanged.fire();
+    },
   });
   view.attach(controller);
+  registerInlineCompletion(context, () => latestState, stateChanged.event);
 
   // GitHub tools: github-mcp-server runs on this Mac as a child process, with the
   // GitHub token from the Keychain. It starts on first use, not at activation.
@@ -155,6 +164,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push(
     { dispose: () => (clearTimeout(firstCheck), clearInterval(laterChecks)) },
+    stateChanged,
     vscode.commands.registerCommand('oreo.checkForUpdates', () => checkForUpdates(true)),
     status,
     vscode.window.registerWebviewViewProvider(ChatViewProvider.viewId, view, {

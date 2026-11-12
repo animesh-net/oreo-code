@@ -63,6 +63,11 @@
         "command": "oreo.checkForUpdates",
         "title": "Check for updates",
         "category": "Oreo Code"
+      },
+      {
+        "command": "oreo.toggleCompletion",
+        "title": "Turn completion on or off",
+        "category": "Oreo Code"
       }
     ],
     "menus": {
@@ -101,6 +106,22 @@
           "type": "string",
           "default": "https://ai.animesh.org.in/v1",
           "markdownDescription": "oreo-ai's Workers AI relay on the Pi, reachable over Tailscale only, for the Cloudflare models (Oreo 30B, Oreo 120B). oreo-ai holds the Cloudflare token; what you send these models leaves the Mac. Leave empty to turn the Cloudflare models off."
+        },
+        "oreo.completion.enabled": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Inline code completion (ghost text) from Oreo 1.5B on the Mac's Ollama, with snippets from this repository. Nothing is sent to oreo-ai or Cloudflare."
+        },
+        "oreo.completion.disabledLanguages": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "plaintext",
+            "markdown"
+          ],
+          "markdownDescription": "Language ids (such as `markdown`) where inline completion is off."
         }
       }
     }
