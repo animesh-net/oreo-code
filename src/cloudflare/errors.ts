@@ -31,6 +31,17 @@ export function describeCloudflareError(err: unknown, relayUrl: string): string 
   return 'Something went wrong talking to Cloudflare through oreo-ai.';
 }
 
+/**
+ * True when Cloudflare refused for its limits: the daily free Neurons are used up
+ * (error 3036) or a rate limit hit (HTTP 429). Agent mode then moves to a Mac model.
+ */
+export function isCloudLimitError(err: unknown): boolean {
+  const status = err instanceof APIError ? err.status : err instanceof RelayHttpError ? err.status : undefined;
+  if (status === 429) return true;
+  const text = err instanceof Error ? err.message : '';
+  return /\b3036\b|daily free allocation/i.test(text);
+}
+
 function unreachable(relayUrl: string): string {
   return `Can't reach oreo-ai at ${relayUrl}. Is the Mac on Tailscale?`;
 }

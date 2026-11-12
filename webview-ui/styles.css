@@ -329,3 +329,65 @@ textarea:focus {
   border: none;
   border-top: 1px solid var(--vscode-panel-border);
 }
+
+/* Agent mode */
+.pill.agent[aria-pressed='true'] {
+  color: var(--vscode-button-foreground);
+  background: var(--vscode-button-background);
+}
+.approve-edits {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.9em;
+  margin: 4px 0;
+}
+.steps {
+  margin: 4px 0;
+}
+.step summary {
+  cursor: pointer;
+  font-size: 0.9em;
+  color: var(--vscode-descriptionForeground);
+}
+.step.error summary,
+.step.rejected summary {
+  color: var(--vscode-errorForeground);
+}
+.step pre,
+.approval pre {
+  font-family: var(--vscode-editor-font-family);
+  font-size: 0.85em;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 240px;
+  overflow: auto;
+  margin: 4px 0;
+  padding: 4px 6px;
+  background: var(--vscode-textCodeBlock-background);
+}
+.approval {
+  margin: 0 8px 8px;
+  padding: 8px;
+  border: 1px solid var(--vscode-focusBorder);
+  border-radius: 4px;
+}
+.approval-title {
+  font-weight: 600;
+}
+.approval .add {
+  color: var(--vscode-gitDecoration-addedResourceForeground);
+}
+.approval .del {
+  color: var(--vscode-gitDecoration-deletedResourceForeground);
+}
+.approval-buttons,
+.undo {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.undo {
+  margin: 0 8px 8px;
+  justify-content: space-between;
+}

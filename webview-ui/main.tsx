@@ -4,6 +4,8 @@ import {
   effortChoices,
   effortLabel,
   shownEffort,
+  type AgentStep,
+  type ApprovalRequest,
   type ChatMessage,
   type ToWebview,
   type ViewState,
@@ -18,6 +20,9 @@ const emptyState: ViewState = {
   models: [],
   messages: [],
   busy: false,
+  agentMode: false,
+  approveEdits: false,
+  hasFolder: false,
 };
 
 interface Saved {
@@ -29,6 +34,7 @@ function App() {
   const [state, setState] = useState<ViewState>(emptyState);
   const [streaming, setStreaming] = useState('');
   const [activity, setActivity] = useState<string[]>([]);
+  const [steps, setSteps] = useState<AgentStep[]>([]);
   const [thinking, setThinking] = useState(false);
   const [draft, setDraft] = useState(saved.draft ?? '');
   const [menuOpen, setMenuOpen] = useState(false);
@@ -43,6 +49,7 @@ function App() {
           if (!msg.state.busy) {
             setStreaming('');
             setActivity([]);
+            setSteps([]);
             setThinking(false);
           }
           break;
@@ -53,6 +60,10 @@ function App() {
         case 'activity':
           setThinking(false);
           setActivity((a) => [...a, msg.text]);
+          break;
+        case 'step':
+          setThinking(false);
+          setSteps((s) => [...s, msg.step]);
           break;
         case 'thinking':
           setThinking(true);
@@ -74,9 +85,12 @@ function App() {
   useEffect(() => {
     const el = listRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [state.messages, streaming]);
+  }, [state.messages, streaming, steps, state.approval]);
 
   const model = state.models.find((m) => m.id === state.selectedModel);
+  // Agent mode needs a model that can use tools and an open folder to work in.
+  const agentOffered = !!model?.supportsTools && state.hasFolder;
+  const agentOn = agentOffered && state.agentMode;
   const canSend = !state.busy && !!state.selectedModel && draft.trim().length > 0;
   const send = () => {
     if (!canSend) return;
@@ -88,18 +102,37 @@ function App() {
     <div class="chat">
       <div class="messages" ref={listRef} aria-live="polite">
         {state.messages.length === 0 && !state.busy && (
-          <p class="muted empty">Ask anything. Agent mode with GitHub tools comes next.</p>
+          <p class="muted empty">
+            Ask anything, or turn on Agent to let Oreo Code edit files and run commands, each with your approval.
+          </p>
         )}
         {state.messages.map((m, i) => (
           <Bubble key={i} message={m} />
         ))}
         {state.busy && (
           <Bubble
-            message={{ role: 'assistant', content: streaming, activity }}
-            pending={thinking ? 'Thinking…' : '…'}
+            message={{ role: 'assistant', content: streaming, activity, steps }}
+            pending={thinking ? 'Thinking…' : state.approval ? 'Waiting for your approval…' : '…'}
           />
         )}
       </div>
+
+      {state.approval && <Approval request={state.approval} />}
+
+      {!state.busy && !!state.undoFiles?.length && (
+        <div class="undo banner">
+          <span>
+            The last task changed {state.undoFiles.length} file{state.undoFiles.length === 1 ? '' : 's'}.
+          </span>
+          <button
+            class="secondary"
+            title={state.undoFiles.join('\n')}
+            onClick={() => vscode.postMessage({ type: 'undoTask' })}
+          >
+            Undo task
+          </button>
+        </div>
+      )}
 
       {state.error && (
         <div class="error banner">
@@ -116,7 +149,7 @@ function App() {
       <footer class="composer">
         <textarea
           aria-label="Message"
-          placeholder="Message Oreo Code"
+          placeholder={agentOn ? 'Describe a task for the agent' : 'Message Oreo Code'}
           rows={2}
           value={draft}
           onInput={(e) => setDraft(e.currentTarget.value)}
@@ -127,6 +160,16 @@ function App() {
             }
           }}
         />
+        {agentOn && (
+          <label class="approve-edits">
+            <input
+              type="checkbox"
+              checked={state.approveEdits}
+              onChange={(e) => vscode.postMessage({ type: 'setApproveEdits', on: e.currentTarget.checked })}
+            />
+            Approve edits for this task (commands still ask)
+          </label>
+        )}
         <div class="composer-row">
           {menuOpen && <button class="dismiss" aria-label="Close menu" onClick={() => setMenuOpen(false)} />}
           <div class="anchor">
@@ -188,6 +231,21 @@ function App() {
               </div>
             )}
           </div>
+          {agentOffered && (
+            <button
+              class="pill agent"
+              aria-pressed={agentOn}
+              title={
+                agentOn
+                  ? 'Agent mode is on: Oreo Code may edit files and run commands, each with your approval.'
+                  : 'Turn on agent mode'
+              }
+              disabled={state.busy}
+              onClick={() => vscode.postMessage({ type: 'setAgentMode', on: !agentOn })}
+            >
+              Agent
+            </button>
+          )}
           {state.busy ? (
             <button
               class="round stop"
@@ -212,10 +270,48 @@ function App() {
   );
 }
 
+/** A write the agent wants to make: the diff or command as plain text, then Approve or Reject. */
+function Approval({ request }: { request: ApprovalRequest }) {
+  const answer = (approved: boolean) => vscode.postMessage({ type: 'approval', id: request.id, approved });
+  return (
+    <div class="approval" role="dialog" aria-label="Approve this change">
+      <div class="approval-title">{request.title}</div>
+      {request.cwd && <div class="muted">in {request.cwd}</div>}
+      {/* Model output: rendered as text, never as HTML. */}
+      <pre class={request.kind === 'run_command' ? 'command' : 'diff'}>
+        {request.kind === 'run_command'
+          ? request.detail
+          : request.detail.split('\n').map((line, i) => (
+              <span key={i} class={line.startsWith('+') ? 'add' : line.startsWith('-') ? 'del' : undefined}>
+                {line}
+                {'\n'}
+              </span>
+            ))}
+      </pre>
+      <div class="approval-buttons">
+        <button onClick={() => answer(true)}>Approve</button>
+        <button class="secondary" onClick={() => answer(false)}>
+          Reject
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function Bubble({ message, pending }: { message: ChatMessage; pending?: string }) {
   return (
     <div class={`bubble ${message.role}`}>
       <div class="role">{message.role === 'user' ? 'You' : 'Oreo Code'}</div>
+      {!!message.steps?.length && (
+        <div class="steps">
+          {message.steps.map((s, i) => (
+            <details key={i} class={`step ${s.outcome}`}>
+              <summary>{s.title}</summary>
+              {s.detail && <pre>{s.detail}</pre>}
+            </details>
+          ))}
+        </div>
+      )}
       {!!message.activity?.length && (
         <ul class="activity">
           {message.activity.map((a, i) => (

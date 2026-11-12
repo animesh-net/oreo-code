@@ -110,29 +110,34 @@ SSE) at the `oreo.ollamaUrl` setting. The Cloudflare models go through oreo-ai's
 relay on the Pi at the `oreo.cloudUrl` setting (`GET /models`, `POST
 /chat/completions`, relayed unchanged to Workers AI with the Pi's token), reachable
 over Tailscale only; nothing else of oreo-ai is used: no sign-in. The models are created from the Modelfiles in oreo-ai's
-`ollama/` folder. The plan: sidebar chat and a local `github-mcp-server` over
-stdio (now), then an agent loop with approval cards, and local workspace tools.
+`ollama/` folder. Now: sidebar chat, inline completion, local workspace tools and
+agent mode with approval cards and undo; next: the agent's GitHub step (branch,
+commit, pull request) through the local `github-mcp-server` over stdio.
 
-| Path                                | What it is                                                                                     |
-| ----------------------------------- | ---------------------------------------------------------------------------------------------- |
-| `src/extension.ts`                  | `activate()`: commands, sidebar view, status bar                                               |
-| `src/auth/`                         | Secrets in VS Code SecretStorage (the macOS Keychain)                                          |
-| `src/ollama/`                       | Ollama client (OpenAI-compatible), the fixed model list, URL check and error wording           |
-| `src/cloudflare/`                   | Workers AI client via oreo-ai's relay (model list, thinking, `<think>` filter), error wording  |
-| `src/chat/`                         | Chat state and turns; no `vscode` imports, unit tested                                         |
-| `src/views/`                        | Webview host, CSP, message relay                                                               |
-| `src/mcp/`                          | Pinned `github-mcp-server` download, MCP host and stdio client                                 |
-| `src/agent/`                        | Tool catalog (namespacing, read/write, allowlist) and the write policy                         |
-| `src/agent/workspaceTools.ts`       | Read-only workspace tools (list, read, search); secret files refused                           |
-| `src/completion/`                   | Inline completion: repo snippets, symbol index, FIM prompt, budget, trimming; no `vscode`      |
-| `src/workspace/inlineCompletion.ts` | The inline completion provider, symbol-index watcher and completion status bar item            |
-| `src/workspace/`                    | The open folder for the snapshot and tools: files, unsaved text, branch, active editor         |
-| `src/update/`                       | Self-update: newest GitHub release, with a token if there is one, else none (public repo)      |
-| `src/shared/protocol.ts`            | Messages between the extension and the webview; both bundles compile with it                   |
-| `webview-ui/`                       | Preact chat UI, bundled to `dist/webview.js`                                                   |
-| `test/`                             | Vitest unit tests                                                                              |
-| `scripts/`                          | README link check and the PR description cleaner (shared with oreo-ai)                         |
-| `.github/workflows/`                | CI (a `v<major>.<minor>.<n>` release per main build), PR description cleaner, Dependabot merge |
+| Path                                | What it is                                                                                                                 |
+| ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `src/extension.ts`                  | `activate()`: commands, sidebar view, status bar                                                                           |
+| `src/auth/`                         | Secrets in VS Code SecretStorage (the macOS Keychain)                                                                      |
+| `src/ollama/`                       | Ollama client (OpenAI-compatible), the fixed model list, URL check and error wording                                       |
+| `src/cloudflare/`                   | Workers AI client via oreo-ai's relay (model list, thinking, `<think>` filter), error wording                              |
+| `src/chat/`                         | Chat state and turns; no `vscode` imports, unit tested                                                                     |
+| `src/views/`                        | Webview host, CSP, message relay                                                                                           |
+| `src/mcp/`                          | Pinned `github-mcp-server` download, MCP host and stdio client                                                             |
+| `src/agent/`                        | Tool catalog (namespacing, read/write, allowlist) and the write policy                                                     |
+| `src/agent/loop.ts`                 | Agent mode's loop: model calls, tool calls, approvals, step limit, move to the Mac on a limit                              |
+| `src/agent/writeTools.ts`           | Agent write tools (edit_file, create_file, run_command): path rules, diffs, applying                                       |
+| `src/agent/checkpoint.ts`           | "Undo task": each changed file's text from before the task, in memory                                                      |
+| `src/agent/findSymbol.ts`           | Read-only `find_symbol` over the completion symbol index                                                                   |
+| `src/agent/workspaceTools.ts`       | Read-only workspace tools (list, read, search); secret files refused                                                       |
+| `src/completion/`                   | Inline completion: repo snippets, symbol index, FIM prompt, budget, trimming; no `vscode`                                  |
+| `src/workspace/inlineCompletion.ts` | The inline completion provider, symbol-index watcher and completion status bar item                                        |
+| `src/workspace/`                    | The open folder for the snapshot and tools: files, unsaved text, branch, active editor; writes and commands for agent mode |
+| `src/update/`                       | Self-update: newest GitHub release, with a token if there is one, else none (public repo)                                  |
+| `src/shared/protocol.ts`            | Messages between the extension and the webview; both bundles compile with it                                               |
+| `webview-ui/`                       | Preact chat UI, bundled to `dist/webview.js`                                                                               |
+| `test/`                             | Vitest unit tests                                                                                                          |
+| `scripts/`                          | README link check and the PR description cleaner (shared with oreo-ai)                                                     |
+| `.github/workflows/`                | CI (a `v<major>.<minor>.<n>` release per main build), PR description cleaner, Dependabot merge                             |
 
 ## Rules for the code
 
@@ -171,6 +176,27 @@ stdio (now), then an agent loop with approval cards, and local workspace tools.
   write. `src/agent/policy.ts` refuses writes outside `oreo-agent/` branches and
   pull requests not into `main`, and every write needs approval. Never relax these
   through the prompt.
+- **Agent mode writes only with approval.** `runAgent` (`src/agent/loop.ts`) sends
+  every write tool through `needsApproval` (`src/agent/policy.ts`): `run_command`
+  always asks; `edit_file` and `create_file` ask unless "Approve edits for this task"
+  is on, which resets when the task ends and never covers a file that decides what
+  runs (`runsCode`: scripts, hooks, build, CI, package lists and settings,
+  code-based tool configs and editor task files). The card shows
+  the whole change, never a cut one (`MAX_WRITE_CHARS` caps file size instead), and a
+  command with hidden or control characters is refused. A rejection goes back to the model; Stop
+  counts as one. `writePathProblem` refuses absolute paths, `.`/`..`, `.git` at any depth
+  and secret files, in any letter case; the workspace refuses writes through symbolic
+  links or outside the folder's real path, checked before the card and again on write; an edit's `old_text` must match exactly once (in a
+  `\r\n` file, with its line endings), checked again when
+  applied. Every file is remembered in the task's `Checkpoint` before it changes, so
+  "Undo task" can restore it; undo leaves a file alone if it changed after the task
+  wrote it, and a task that changes nothing keeps the last task's undo, as does New chat.
+  Commands run with `commandEnv`: your environment without VS Code's `ELECTRON_RUN_AS_NODE` and `VSCODE_*`. `fitToContext`
+  counts tool-call arguments and trims those of calls already made. A tool that fails goes back to the model as an error; the task goes on. Calls get unique ids, unparseable
+  arguments are replaced with `{}` in the conversation, and the last round (no tools offered) runs no calls.
+  `MAX_AGENT_STEPS` is the only step limit. Agent mode is
+  offered only for models with `supportsTools: true`; `find_symbol` reads the one
+  symbol index completion keeps, never a second one.
 - **Workspace tools only read.** `src/agent/workspaceTools.ts` reads only files in the
   listing (no absolute paths or `..`) and never `.env*`, keys or other secret files,
   in tools or the snapshot. Writes go through the approval flow, never these tools.

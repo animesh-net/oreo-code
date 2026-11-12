@@ -56,6 +56,50 @@ function githubWriteProblem(tool: string, args: Record<string, unknown>): string
   return undefined;
 }
 
+/**
+ * Files that decide what runs: scripts, hooks, build and CI files, editor tasks. An
+ * edit to one could change what an approved command (e.g. "npm test") or VS Code
+ * does, so it always asks, even with "Approve edits for this task" on.
+ */
+const RUNS_CODE = [
+  /(^|\/)package\.json$/i,
+  /(^|\/)(makefile|gnumakefile|justfile|taskfile\.ya?ml|dockerfile|compose\.ya?ml|docker-compose\.ya?ml)$/i,
+  /(^|\/)\.(vscode|husky|githooks|github|devcontainer|circleci|gitlab-ci)(\/|$)/i,
+  /(^|\/)\.(gitlab-ci\.yml|envrc|yarnrc(\.yml)?|pnpmfile\.cjs|gitattributes|gitmodules)$/i,
+  /\.(sh|bash|zsh|command|ps1|bat|cmd)$/i,
+  /\.(csproj|fsproj|vbproj|props|targets|sln|slnx)$/i,
+  /(^|\/)(setup\.py|pyproject\.toml|tox\.ini|noxfile\.py|conftest\.py|build\.gradle(\.kts)?|pom\.xml)$/i,
+  // Package settings and lists: installs run the packages' own scripts.
+  /(^|\/)\.npmrc$/i,
+  /(^|\/)(package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|pnpm-workspace\.yaml|bun\.lockb?)$/i,
+  /(^|\/)(nuget\.config|global\.json|packages\.lock\.json)$/i,
+  /(^|\/)(requirements[^/]*\.txt|pipfile(\.lock)?|poetry\.lock|uv\.lock|gemfile(\.lock)?|rakefile|cargo\.toml|build\.rs|go\.mod)$/i,
+  // Tool configs that are code, loaded when tests, linters or builds run.
+  /(^|\/)[^/]+\.config\.(js|cjs|mjs|ts|cts|mts)$/i,
+  /(^|\/)(\.eslintrc|\.prettierrc|\.mocharc|\.babelrc|babel\.config|\.stylelintrc)(\.(js|cjs|mjs|ts))$/i,
+  /(^|\/)esbuild\.(js|cjs|mjs|ts)$/i,
+];
+
+export function runsCode(path: string): boolean {
+  return RUNS_CODE.some((re) => re.test(path));
+}
+
+/**
+ * Whether agent mode's own write tools (src/agent/writeTools.ts) need your approval.
+ * A command always does. Edits and new files do unless you switched on "Approve
+ * edits for this task", which covers only those two, only that task, and never a
+ * file that decides what runs (runsCode).
+ */
+export function needsApproval(
+  tool: 'edit_file' | 'create_file' | 'run_command',
+  approveEdits: boolean,
+  path?: string,
+): boolean {
+  if (tool === 'run_command') return true;
+  if (path !== undefined && runsCode(path)) return true;
+  return !approveEdits;
+}
+
 /** One line for the approval card; the card also shows the full arguments. */
 export function summarize(tool: CatalogTool, args: Record<string, unknown>): string {
   const repo = [str(args.owner), str(args.repo)].filter(Boolean).join('/');
