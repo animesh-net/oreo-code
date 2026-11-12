@@ -234,6 +234,20 @@ async function settled(ws: WritableWorkspace, path: string, sent: string): Promi
   }
 }
 
+/**
+ * The environment a command runs with: yours, without what VS Code sets for its own
+ * extension host. ELECTRON_RUN_AS_NODE in particular would make any Electron program
+ * the command starts (VS Code extension tests, Electron apps) run as plain Node.
+ */
+export function commandEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const clean: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(env)) {
+    if (key === 'ELECTRON_RUN_AS_NODE' || key.startsWith('VSCODE_') || key === 'ELECTRON_NO_ATTACH_CONSOLE') continue;
+    clean[key] = value;
+  }
+  return { ...clean, CI: '1', FORCE_COLOR: '0', NO_COLOR: '1' };
+}
+
 /** One line for the chat and the approval card. */
 export function describeWrite(pending: PendingWrite): string {
   switch (pending.kind) {

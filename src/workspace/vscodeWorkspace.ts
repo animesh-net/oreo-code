@@ -3,7 +3,7 @@ import { lstat, realpath } from 'node:fs/promises';
 import * as nodePath from 'node:path';
 import * as vscode from 'vscode';
 import type { ActiveFile } from '../agent/workspaceTools';
-import { COMMAND_TIMEOUT_MS, type CommandResult, type WritableWorkspace } from '../agent/writeTools';
+import { COMMAND_TIMEOUT_MS, commandEnv, type CommandResult, type WritableWorkspace } from '../agent/writeTools';
 
 /** Folders never listed or read: dependencies, git internals and build output. */
 const EXCLUDE =
@@ -136,7 +136,7 @@ class FolderWorkspace implements WritableWorkspace {
       const shell = process.env.SHELL || '/bin/zsh';
       const child = spawn(shell, ['-lc', command], {
         cwd: this.root,
-        env: { ...process.env, CI: '1', FORCE_COLOR: '0', NO_COLOR: '1' },
+        env: commandEnv(process.env),
         stdio: ['ignore', 'pipe', 'pipe'],
         // Its own process group, so Stop and the timeout end the whole command, not just the shell.
         detached: true,

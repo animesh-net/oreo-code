@@ -8,6 +8,7 @@ import {
   applyWrite,
   makeDiff,
   prepareWrite,
+  commandEnv,
   keepEnds,
   MAX_WRITE_CHARS,
   writePathProblem,
@@ -244,6 +245,11 @@ describe('write tools', () => {
     if (!('pending' in prepared)) throw new Error(`expected pending: ${JSON.stringify(prepared)}`);
     await applyWrite(ws, prepared.pending, new AbortController().signal, () => {});
     expect(ws.files['Program.cs']).toBe('class A\r\n{\r\n    int x = 2;\r\n    int y = 3;\r\n}\r\n');
+  });
+
+  it("runs commands without VS Code's own environment", () => {
+    const env = commandEnv({ PATH: '/usr/bin', HOME: '/Users/a', ELECTRON_RUN_AS_NODE: '1', VSCODE_PID: '42' });
+    expect(env).toEqual({ PATH: '/usr/bin', HOME: '/Users/a', CI: '1', FORCE_COLOR: '0', NO_COLOR: '1' });
   });
 
   it("tells the model which unsaved files a command couldn't see", async () => {
@@ -662,6 +668,25 @@ describe('agent mode in the chat', () => {
     expect(ws.files['a.ts']).toBe('x');
     expect(controller.state.undoFiles).toBeUndefined();
     expect(controller.state.messages.at(-1)?.content).toMatch(/put back 1 file \(a\.ts\)/);
+  });
+
+  it('New chat during a task keeps the old turn out of the new chat, and keeps Undo', async () => {
+    const { ws, controller } = await setup([
+      [call('edit_file', { path: 'a.ts', old_text: 'x', new_text: 'y' })],
+      [call('run_command', { command: 'npm test' })],
+      'never',
+    ]);
+    await controller.handle({ type: 'setAgentMode', on: true });
+    await controller.handle({ type: 'setApproveEdits', on: true });
+    const task = controller.handle({ type: 'send', text: 'change x' });
+    for (let i = 0; i < 20 && !controller.state.approval; i++) await tick();
+    expect(ws.files['a.ts']).toBe('y'); // the edit was applied; the command is waiting
+    controller.newChat();
+    await task;
+    expect(controller.state.messages).toEqual([]);
+    expect(controller.state.undoFiles).toEqual(['a.ts']);
+    await controller.handle({ type: 'undoTask' });
+    expect(ws.files['a.ts']).toBe('x');
   });
 
   it('shows the command and folder on the card, and Stop rejects it', async () => {

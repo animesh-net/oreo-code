@@ -190,7 +190,8 @@ commit, pull request) through the local `github-mcp-server` over stdio.
   `\r\n` file, with its line endings), checked again when
   applied. Every file is remembered in the task's `Checkpoint` before it changes, so
   "Undo task" can restore it; undo leaves a file alone if it changed after the task
-  wrote it, and a task that changes nothing keeps the last task's undo. `fitToContext`
+  wrote it, and a task that changes nothing keeps the last task's undo, as does New chat.
+  Commands run with `commandEnv`: your environment without VS Code's `ELECTRON_RUN_AS_NODE` and `VSCODE_*`. `fitToContext`
   counts tool-call arguments and trims those of calls already made. A tool that fails goes back to the model as an error; the task goes on. Calls get unique ids, unparseable
   arguments are replaced with `{}` in the conversation, and the last round (no tools offered) runs no calls.
   `MAX_AGENT_STEPS` is the only step limit. Agent mode is

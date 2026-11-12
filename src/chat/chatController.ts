@@ -162,6 +162,8 @@ export class ChatController {
   private approveEdits = false;
   private approval: { request: ApprovalRequest; answer(approved: boolean): void } | undefined;
   private approvalSeq = 0;
+  /** Bumped by New chat, so a task stopped by it doesn't write into the new chat. */
+  private chatId = 0;
   /** What the last agent task changed, for "Undo task". */
   private checkpoint: Checkpoint | undefined;
 
@@ -316,10 +318,11 @@ export class ChatController {
   }
 
   newChat(): void {
+    this.chatId++;
     this.abort?.abort();
     this.messages = [];
     this.error = undefined;
-    this.checkpoint = undefined;
+    // The last task's undo stays: its files are still changed, whatever chat is open.
     this.publish();
   }
 
@@ -355,6 +358,7 @@ export class ChatController {
     if (!text || this.busy || !client || !model) return;
 
     const turnStart = this.messages.length;
+    const chat = this.chatId;
     this.messages.push({ role: 'user', content: text });
     const history = [...this.messages];
     this.busy = true;
@@ -367,6 +371,7 @@ export class ChatController {
     const activity: string[] = [];
     const steps: AgentStep[] = [];
     const finish = () => {
+      if (this.chatId !== chat) return; // New chat was pressed; this turn belongs to the old one.
       const message: ChatMessage = { role: 'assistant', content: reply };
       if (activity.length) message.activity = activity;
       if (steps.length) message.steps = steps;
@@ -449,7 +454,7 @@ export class ChatController {
       if (abort.signal.aborted) {
         // You pressed Stop: keep what arrived, if anything, and the agent's steps.
         if (reply || steps.length) finish();
-        else this.messages.splice(turnStart);
+        else if (this.chatId === chat) this.messages.splice(turnStart);
       } else {
         const message = inCloud
           ? describeCloudflareError(err, this.cloudUrl)
