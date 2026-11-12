@@ -19,7 +19,9 @@ import {
   applyWrite,
   makeDiff,
   prepareWrite,
+  closestText,
   commandEnv,
+  findIgnoringWhitespace,
   keepEnds,
   MAX_WRITE_CHARS,
   writePathProblem,
@@ -1035,5 +1037,112 @@ describe('claims changes it never made', () => {
     const result = await runAgent(deps(client, ws, { approveEdits: () => true }));
     expect(client.calls).toHaveLength(2);
     expect(result.reply).toBe("I've updated a.js.");
+  });
+});
+
+describe('edits with tidied spacing', () => {
+  const tight =
+    'const s=createServer(async(req,res)=>{try{const f=await readFile(`public${req.url}`);return true}catch(e){respondWithNotFound(res)}});\nexport default s;\n';
+
+  it('applies an edit whose old_text differs only in whitespace, when it is unique', async () => {
+    const ws = memoryWorkspace({ 'server/index.js': tight });
+    const prepared = await prepareWrite(
+      ws,
+      call('edit_file', {
+        path: 'server/index.js',
+        old_text: 'return true } catch (e) { respondWithNotFound(res) }',
+        new_text: 'return true } catch (e) { res.writeHead(404); res.end() }',
+      }),
+    );
+    if (!('pending' in prepared)) throw new Error(`expected pending: ${JSON.stringify(prepared)}`);
+    await applyWrite(ws, prepared.pending, new AbortController().signal, () => {});
+    expect(ws.files['server/index.js']).toContain('return true } catch (e) { res.writeHead(404); res.end() }});');
+    expect(ws.files['server/index.js']).toContain('export default s;');
+  });
+
+  it('refuses a loose match that appears more than once, or is too short to trust', async () => {
+    const ws = memoryWorkspace({ 'a.js': 'let total = a + b;\nlet total = a + b;\nx=1;\n' });
+    const twice = await prepareWrite(
+      ws,
+      call('edit_file', { path: 'a.js', old_text: 'let total=a+b;', new_text: 'y' }),
+    );
+    expect('error' in twice && twice.error).toMatch(/appears 2 times/);
+    const short = await prepareWrite(ws, call('edit_file', { path: 'a.js', old_text: 'x = 1;', new_text: 'x = 2;' }));
+    expect('error' in short && short.error).toMatch(/not found/);
+  });
+
+  it('shows the closest real text when old_text is not found', async () => {
+    const ws = memoryWorkspace({ 'server/index.js': tight });
+    const r = await prepareWrite(
+      ws,
+      call('edit_file', {
+        path: 'server/index.js',
+        old_text: 'catch(err){ respondWithNotFound(response) }',
+        new_text: 'x',
+      }),
+    );
+    expect('error' in r && r.error).toMatch(/closest text in the file \(lines 1–1\)[\s\S]*respondWithNotFound\(res\)/);
+    expect(findIgnoringWhitespace('a b c d e f g h i j k l m', 'abcdefghijklm')).toEqual([{ start: 0, end: 25 }]);
+    expect(closestText('alpha\nbeta', 'gamma delta')).toBeUndefined();
+  });
+
+  it('names the file in a failed edit step', async () => {
+    const ws = memoryWorkspace({ 'a.js': 'x' });
+    const client = scripted([
+      [call('edit_file', { path: 'a.js', old_text: 'nothing like it', new_text: 'y' })],
+      'Gave up.',
+    ]);
+    const d = deps(client, ws);
+    await runAgent(d);
+    expect(d.steps[0].title).toBe("Couldn't edit file a.js");
+  });
+});
+
+describe('loose edits keep the file tidy', () => {
+  it("moves the new lines to the file's indentation", async () => {
+    const ws = memoryWorkspace({
+      'a.py': 'def f():\n        if ready_to_go:\n                go_now()\n        return 1\n',
+    });
+    const prepared = await prepareWrite(
+      ws,
+      call('edit_file', {
+        path: 'a.py',
+        old_text: '    if ready_to_go:\n        go_now()',
+        new_text: '    if ready_to_go:\n        go_now()\n        stop_now()',
+      }),
+    );
+    if (!('pending' in prepared)) throw new Error(`expected pending: ${JSON.stringify(prepared)}`);
+    await applyWrite(ws, prepared.pending, new AbortController().signal, () => {});
+    expect(ws.files['a.py']).toBe(
+      'def f():\n        if ready_to_go:\n                go_now()\n                stop_now()\n        return 1\n',
+    );
+  });
+
+  it('keeps tabs in a tab-indented file, also for a deeper new level', async () => {
+    const ws = memoryWorkspace({ 'c.go': 'func f() {\n\tif readyToGo {\n\t\tgoNow()\n\t}\n}\n' });
+    const prepared = await prepareWrite(
+      ws,
+      call('edit_file', {
+        path: 'c.go',
+        old_text: '    if readyToGo {\n        goNow()',
+        new_text: '    if readyToGo {\n        goNow()\n        if late {\n            hurry()\n        }',
+      }),
+    );
+    if (!('pending' in prepared)) throw new Error(`expected pending: ${JSON.stringify(prepared)}`);
+    await applyWrite(ws, prepared.pending, new AbortController().signal, () => {});
+    expect(ws.files['c.go']).toBe(
+      'func f() {\n\tif readyToGo {\n\t\tgoNow()\n\t\tif late {\n\t\t\thurry()\n\t\t}\n\t}\n}\n',
+    );
+  });
+
+  it('removes whole lines when the edit deletes them', async () => {
+    const ws = memoryWorkspace({ 'b.js': 'a();\n  removeTheOldThing(  1 );\nb();\n' });
+    const prepared = await prepareWrite(
+      ws,
+      call('edit_file', { path: 'b.js', old_text: 'removeTheOldThing(1);', new_text: '' }),
+    );
+    if (!('pending' in prepared)) throw new Error('expected pending');
+    await applyWrite(ws, prepared.pending, new AbortController().signal, () => {});
+    expect(ws.files['b.js']).toBe('a();\nb();\n');
   });
 });

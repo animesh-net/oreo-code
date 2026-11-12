@@ -190,7 +190,10 @@ commit, pull request) through the local `github-mcp-server` over stdio.
   counts as one. `writePathProblem` refuses absolute paths, `.`/`..`, `.git` at any depth
   and secret files, in any letter case; the workspace refuses writes through symbolic
   links or outside the folder's real path, checked before the card and again on write; an edit's `old_text` must match exactly once (read_file's `12: ` line numbers are
-  stripped if the model copied them; in a
+  stripped if the model copied them; if it still isn't found, a match ignoring whitespace
+  (`findIgnoringWhitespace`, at least 12 non-space characters) is used when unique, its new
+  lines moved to the file's indentation and deleted lines removed whole, and a
+  miss shows the model the closest real lines (`closestText`); in a
   `\r\n` file, with its line endings), checked again when
   applied. Every file is remembered in the task's `Checkpoint` before it changes, so
   "Undo task" can restore it; undo leaves a file alone if it changed after the task

@@ -430,7 +430,12 @@ async function runWrite(
 ): Promise<string> {
   const prepared = await prepareWrite(deps.workspace, call);
   if ('error' in prepared) {
-    step({ title: `Couldn't ${call.function.name.replace('_', ' ')}`, detail: prepared.error, outcome: 'error' });
+    const where = pathOf(call);
+    step({
+      title: `Couldn't ${call.function.name.replace('_', ' ')}${where ? ` ${where}` : ''}`,
+      detail: prepared.error,
+      outcome: 'error',
+    });
     return prepared.error;
   }
   const { pending } = prepared;

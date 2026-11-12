@@ -251,6 +251,123 @@ export function commandEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return { ...clean, CI: '1', FORCE_COLOR: '0', NO_COLOR: '1' };
 }
 
+/** Below this many non-space characters, a whitespace-free match is too likely to be wrong. */
+const MIN_LOOSE_CHARS = 12;
+
+/**
+ * Where `needle` occurs in `text` when all whitespace is ignored, as [start, end) in
+ * `text` from the first to the last non-space character of each match.
+ */
+export function findIgnoringWhitespace(text: string, needle: string): { start: number; end: number }[] {
+  const target = needle.replace(/\s+/g, '');
+  if (target.length < MIN_LOOSE_CHARS) return [];
+  let squeezed = '';
+  const at: number[] = [];
+  for (let i = 0; i < text.length; i++) {
+    if (/\s/.test(text[i])) continue;
+    squeezed += text[i];
+    at.push(i);
+  }
+  const found: { start: number; end: number }[] = [];
+  for (let i = squeezed.indexOf(target); i >= 0; i = squeezed.indexOf(target, i + 1)) {
+    found.push({ start: at[i], end: at[i + target.length - 1] + 1 });
+  }
+  return found;
+}
+
+/**
+ * Puts newText where a whitespace-insensitive match was found. Its lines are moved to the
+ * file's indentation (the model's may differ, which breaks Python), and deleting whole
+ * lines takes the lines away rather than leaving them blank.
+ */
+function replaceLoose(text: string, match: { start: number; end: number }, oldText: string, newText: string): string {
+  let { start, end } = match;
+  const lineStart = text.lastIndexOf('\n', start - 1) + 1;
+  const fileIndent = text.slice(lineStart, start);
+  const body = newText.replace(/^\s*\n/, '').replace(/\s+$/, '');
+  if (!body.trim()) {
+    const lineEnd = text.indexOf('\n', end);
+    const after = text.slice(end, lineEnd < 0 ? text.length : lineEnd);
+    if (!fileIndent.trim() && !after.trim()) {
+      start = lineStart;
+      end = lineEnd < 0 ? text.length : lineEnd + 1;
+    }
+    return text.slice(0, start) + text.slice(end);
+  }
+  const lines = body.split('\n');
+  // Matched mid-line: nothing to line up with, so the lines go in as the model wrote them.
+  const indentOf = fileIndent.trim() ? undefined : indentTranslator(text.slice(lineStart, end), oldText);
+  const moved = lines.map((line, i) => {
+    if (i === 0) return line.trimStart();
+    if (!indentOf || !line.trim()) return line;
+    const own = /^[ \t]*/.exec(line)?.[0] ?? '';
+    return indentOf(own) + line.slice(own.length);
+  });
+  return text.slice(0, start) + moved.join('\n') + text.slice(end);
+}
+
+const indentWidth = (s: string) => s.replace(/\t/g, '    ').length;
+
+/**
+ * Maps the model's indentation to the file's, learned from the lines of old_text and the
+ * file lines they matched: the same levels when known, otherwise the same step per level.
+ */
+function indentTranslator(region: string, oldText: string): (indent: string) => string {
+  const squeeze = (s: string) => s.replace(/\s+/g, '');
+  const lead = (s: string) => /^[ \t]*/.exec(s)?.[0] ?? '';
+  const fileLines = region.split('\n');
+  const known = new Map<number, string>();
+  let j = 0;
+  for (const line of oldText.split('\n').filter((l) => l.trim())) {
+    while (j < fileLines.length && squeeze(fileLines[j]) !== squeeze(line)) j++;
+    if (j >= fileLines.length) break;
+    known.set(indentWidth(lead(line)), lead(fileLines[j]));
+    j++;
+  }
+  const pairs = [...known].sort((a, b) => a[0] - b[0]);
+  const unit = pairs.some(([, f]) => f.includes('\t')) ? '\t' : ' ';
+  return (indent) => {
+    const width = indentWidth(indent);
+    const exact = known.get(width);
+    if (exact !== undefined) return exact;
+    if (!pairs.length) return indent;
+    const [m1, f1] = pairs[0];
+    const [m2, f2] = pairs.length > 1 ? pairs[pairs.length - 1] : [m1, f1];
+    const step = m2 > m1 ? (indentWidth(f2) - indentWidth(f1)) / (m2 - m1) : 1;
+    const target = Math.max(0, Math.round(indentWidth(f1) + (width - m1) * step));
+    return unit === '\t' ? '\t'.repeat(Math.round(target / 4)) : ' '.repeat(target);
+  };
+}
+
+const MAX_NEAR_CHARS = 1_500;
+
+/**
+ * The lines of `text` most like `oldText` (by shared words), to show the model what is
+ * really there; undefined if nothing is close.
+ */
+export function closestText(text: string, oldText: string): { from: number; to: number; text: string } | undefined {
+  const words = (s: string) => new Set(s.match(/[A-Za-z_$][\w$]*|\d+/g) ?? []);
+  const want = words(oldText);
+  if (!want.size) return undefined;
+  const lines = text.split('\n');
+  const span = Math.max(1, Math.min(12, oldText.trim().split('\n').length));
+  let best = { score: 0, from: 0 };
+  for (let i = 0; i + span <= lines.length || (i === 0 && lines.length < span); i++) {
+    const have = words(lines.slice(i, i + span).join('\n'));
+    let shared = 0;
+    for (const w of want) if (have.has(w)) shared++;
+    const score = shared / want.size;
+    if (score > best.score) best = { score, from: i };
+  }
+  if (best.score < 0.5) return undefined;
+  const chosen = lines.slice(best.from, best.from + span).join('\n');
+  return {
+    from: best.from + 1,
+    to: Math.min(lines.length, best.from + span),
+    text: chosen.length > MAX_NEAR_CHARS ? `${chosen.slice(0, MAX_NEAR_CHARS)}…` : chosen,
+  };
+}
+
 /** One line for the chat and the approval card. */
 export function describeWrite(pending: PendingWrite): string {
   switch (pending.kind) {
@@ -337,8 +454,20 @@ function replaceExactlyOnce(
 ): { text: string } | { error: string } {
   const first = text.indexOf(oldText);
   if (first < 0) {
+    // Models often copy code with the spacing tidied ("return true } catch" for
+    // "return true}catch"). Matching while ignoring whitespace is safe when it's unique.
+    const loose = findIgnoringWhitespace(text, oldText);
+    if (loose.length === 1) return { text: replaceLoose(text, loose[0], oldText, newText) };
+    if (loose.length > 1) {
+      return { error: `Error: old_text appears ${loose.length} times in ${path}. Include more lines so it is unique.` };
+    }
+    const near = closestText(text, oldText);
     return {
-      error: `Error: old_text was not found in ${path}. Copy it exactly from read_file, without the "12: " line numbers, with the same spaces and indentation, and include only a few whole lines.`,
+      error:
+        `Error: old_text was not found in ${path}. Copy it exactly from read_file, without the "12: " line numbers, and include only a few whole lines.` +
+        (near
+          ? `\nThe closest text in the file (lines ${near.from}–${near.to}); copy from it exactly:\n${near.text}`
+          : ''),
     };
   }
   let count = 0;
