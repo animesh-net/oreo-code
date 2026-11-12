@@ -369,9 +369,10 @@ export function replaceLines(
     return { error: 'Error: start_line and end_line must be whole line numbers, as read_file shows them.' };
   }
   const { lines, eol } = splitLines(text);
-  // A file ending in a newline splits into an empty last item; it isn't a line to edit.
+  // Numbered as read_file shows them: a file ending in a newline has an empty last line,
+  // which the model may edit or append after. The final newline is kept either way.
   const endsWithNewline = lines.at(-1) === '';
-  const count = endsWithNewline ? lines.length - 1 : lines.length;
+  const count = lines.length;
   if (s < 1 || s > count + 1 || e < s - 1 || e > count) {
     return {
       error: `Error: ${path} has ${count} lines; lines ${s}–${e} aren't in it. Read the file again for the current line numbers.`,
@@ -379,7 +380,8 @@ export function replaceLines(
   }
   const added = newLines(newText);
   const out = [...lines.slice(0, s - 1), ...added, ...lines.slice(e)];
-  const outCount = endsWithNewline ? out.length - 1 : out.length;
+  if (endsWithNewline && out.at(-1) !== '') out.push('');
+  const outCount = out.length;
   const from = Math.max(1, s - REPORT_CONTEXT_LINES);
   const to = Math.min(outCount, s - 1 + added.length + REPORT_CONTEXT_LINES);
   const shown = out

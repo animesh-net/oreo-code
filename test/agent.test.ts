@@ -1290,7 +1290,7 @@ describe('edits a small model can make', () => {
     if ('error' in r) throw new Error(r.error);
     expect(r.text).toBe('line one\nTWO\nTWO-B\nTHREE\nline four\n');
     expect(r.report).toBe(
-      'Lines 1–5 of a.txt now:\n1: line one\n2: TWO\n3: TWO-B\n4: THREE\n5: line four\nLines after this change moved by +1.',
+      'Lines 1–6 of a.txt now:\n1: line one\n2: TWO\n3: TWO-B\n4: THREE\n5: line four\n6: \nLines after this change moved by +1.',
     );
   });
 
@@ -1305,9 +1305,22 @@ describe('edits a small model can make', () => {
     expect('text' in crlf && crlf.text).toBe('a\r\nB\r\nC\r\n');
   });
 
+  it('numbers lines as read_file does, so the last line it showed can be edited', async () => {
+    // read_file shows "file (5 lines)" for a 4-line file ending in a newline: line 5 is empty.
+    const ws = memoryWorkspace({ 'a.txt': file });
+    const shown = await runWorkspaceTool(ws, call('read_file', { path: 'a.txt' }));
+    expect(shown.content).toMatch(/^a\.txt \(5 lines\)/);
+    const onLast = replaceLines(file, 'a.txt', 5, 5, 'line five');
+    expect('text' in onLast && onLast.text).toBe('line one\nline two\nline three\nline four\nline five\n');
+    const afterLast = replaceLines(file, 'a.txt', 6, 5, 'line six');
+    expect('text' in afterLast && afterLast.text).toBe('line one\nline two\nline three\nline four\n\nline six\n');
+    const replaceFour = replaceLines(file, 'a.txt', 4, 4, 'FOUR');
+    expect('text' in replaceFour && replaceFour.text).toBe('line one\nline two\nline three\nFOUR\n');
+  });
+
   it('refuses line numbers that are not in the file', () => {
     const r = replaceLines(file, 'a.txt', 7, 8, 'x');
-    expect('error' in r && r.error).toMatch(/has 4 lines; lines 7–8 aren't in it/);
+    expect('error' in r && r.error).toMatch(/has 5 lines; lines 7–8 aren't in it/);
     expect('error' in replaceLines(file, 'a.txt', 'two', 3, 'x')).toBe(true);
   });
 
@@ -1337,7 +1350,7 @@ describe('edits a small model can make', () => {
     const result = await runAgent(d);
     expect(ws.files['server/index.js']).toBe('function a() {\n  run();\n}\n');
     expect(client.calls[1].wire.at(-1)?.content).toMatch(
-      /Edited server\/index\.js\.\nLines 1–3 of server\/index\.js now:\n1: function a\(\) \{\n2:   run\(\);/,
+      /Edited server\/index\.js\.\nLines 1–4 of server\/index\.js now:\n1: function a\(\) \{\n2:   run\(\);/,
     );
     expect(d.steps[0].title).toBe('Edit server/index.js');
     expect(result.reply).toBe('Fixed the call on line 2.');
