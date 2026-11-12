@@ -1166,11 +1166,24 @@ describe('step limit, file-reading commands and the syntax check', () => {
     }
   });
 
-  it('builds a parse-only syntax check for changed Python files only', () => {
-    expect(syntaxCheckCommand(['app/main.py', "it's.py"])).toBe(
-      "if command -v python3 >/dev/null 2>&1; then python3 -c 'import ast,sys; ast.parse(open(sys.argv[1]).read(), sys.argv[1])' 'app/main.py' && python3 -c 'import ast,sys; ast.parse(open(sys.argv[1]).read(), sys.argv[1])' 'it'\\''s.py'; fi",
+  it('builds one plain parse-only command for changed Python files, for any shell', () => {
+    expect(syntaxCheckCommand(['app/main.py', "it's.py", 'README.md'])).toBe(
+      "python3 -c 'import ast,sys; [ast.parse(open(f).read(), f) for f in sys.argv[1:]]' 'app/main.py' 'it'\\''s.py'",
     );
     expect(syntaxCheckCommand(['server/start.js', 'App.jsx', 'README.md'])).toBeUndefined();
+  });
+
+  it('skips the Python syntax check when python3 is not installed', async () => {
+    const ws = memoryWorkspace({ 'a.py': 'x = 1' });
+    ws.runCommand = async (command) => {
+      ws.commands.push(command);
+      return { exitCode: 127, output: 'python3: command not found', timedOut: false };
+    };
+    const client = scripted([[call('edit_file', { path: 'a.py', old_text: 'x = 1', new_text: 'x = 2' })], 'Done.']);
+    const d = deps(client, ws, { approveEdits: () => true });
+    const result = await runAgent(d);
+    expect(result.reply).toBe('Done.');
+    expect(d.steps.some((s) => /Skipped the Python syntax check/.test(s.title))).toBe(true);
   });
 
   it('checks the syntax without a card when the project has no check, and sends failures back', async () => {

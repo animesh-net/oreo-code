@@ -3,7 +3,7 @@ import type { AgentStep, ModelInfo, ReasoningEffort } from '../shared/protocol';
 import type { Checkpoint } from './checkpoint';
 import { describeProblems, newProblems, type Problem } from './instructions';
 import { needsApproval } from './policy';
-import { MAX_VERIFY_ROUNDS, syntaxCheckCommand } from './verify';
+import { COMMAND_NOT_FOUND, MAX_VERIFY_ROUNDS, syntaxCheckCommand } from './verify';
 import {
   applyWrite,
   COMMAND_TIMEOUT_MS,
@@ -417,10 +417,13 @@ async function verifyWork(
     if (syntax) {
       const result = await deps.workspace.runCommand(syntax, deps.signal);
       if (deps.signal.aborted) throw abortError();
-      const passed = !result.timedOut && result.exitCode === 0;
+      const missing = result.exitCode === COMMAND_NOT_FOUND;
+      const passed = missing || (!result.timedOut && result.exitCode === 0);
       const output = keepEnds(result.output.trim(), MAX_COMMAND_OUTPUT_CHARS) || '(no output)';
       step({
-        title: `Checked the syntax of the changed Python files: ${passed ? 'passed' : 'failed'}`,
+        title: missing
+          ? 'Skipped the Python syntax check: python3 is not installed'
+          : `Checked the syntax of the changed Python files: ${passed ? 'passed' : 'failed'}`,
         detail: clip(output),
         outcome: passed ? 'ok' : 'error',
       });

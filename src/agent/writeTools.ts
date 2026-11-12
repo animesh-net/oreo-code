@@ -516,10 +516,6 @@ export function makeDiff(path: string, before: string | undefined, after: string
   return lines.join('\n');
 }
 
-/**
- * Characters that can make a command look different from what runs: control
- * characters (other than tab and newline) and Unicode bidirectional overrides.
- */
 /** A command that only reads or lists files, with no pipe, redirect or chaining. */
 const READS_FILES = /^\s*(cat|head|tail|less|more|ls|find|grep|rg|wc)\b[^|;&<>`$]*$/;
 
@@ -527,4 +523,8 @@ const READS_FILES = /^\s*(cat|head|tail|less|more|ls|find|grep|rg|wc)\b[^|;&<>`$
 const OUTSIDE_LISTING =
   /(node_modules|\.venv|\bvenv\/|\bvendor\/|\bdist\/|\bbuild\/|\bbin\/|\bobj\/|\.next\/|\s\/|\s~)/;
 
+/**
+ * Characters that can make a command look different from what runs: control
+ * characters (other than tab and newline) and Unicode bidirectional overrides.
+ */
 const HIDDEN_CHARS = /[\u0000-\u0008\u000b-\u001f\u007f\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/;
