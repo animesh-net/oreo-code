@@ -14,6 +14,8 @@ const LIST_TTL_MS = 30_000;
 
 /** Output kept from a command, half from its start and half from its end; the model gets less (src/agent/writeTools.ts). */
 const MAX_COMMAND_CAPTURE = 200_000;
+/** How long output may still arrive after the shell exits. */
+const EXIT_DRAIN_MS = 1_000;
 /** How long a stopped command gets to exit before it is killed outright. */
 const KILL_GRACE_MS = 5_000;
 
@@ -36,6 +38,13 @@ class FolderWorkspace implements WritableWorkspace {
 
   private uri(path: string): vscode.Uri {
     return vscode.Uri.joinPath(this.folder.uri, ...path.split('/'));
+  }
+
+  unsavedFiles(): string[] {
+    const root = this.folder.uri.toString() + '/';
+    return vscode.workspace.textDocuments
+      .filter((d) => d.isDirty && d.uri.toString().startsWith(root))
+      .map((d) => vscode.workspace.asRelativePath(d.uri, false));
   }
 
   /** lstat, so a symlink counts as existing even when what it points to doesn't. */
@@ -102,7 +111,8 @@ class FolderWorkspace implements WritableWorkspace {
       const edit = new vscode.WorkspaceEdit();
       edit.replace(uri, new vscode.Range(open.positionAt(0), open.positionAt(open.getText().length)), text);
       if (!(await vscode.workspace.applyEdit(edit))) throw new Error(`VS Code didn't apply the edit to ${path}.`);
-      await open.save();
+      // Commands the agent runs read the disk, so an edit that isn't saved hasn't happened for them.
+      if (!(await open.save())) throw new Error(`VS Code couldn't save ${path}.`);
     } else {
       await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(uri, '..'));
       await vscode.workspace.fs.writeFile(uri, new TextEncoder().encode(text));
@@ -181,6 +191,9 @@ class FolderWorkspace implements WritableWorkspace {
       };
       child.on('error', (err) => done(undefined, err.message));
       child.on('close', (code) => done(code ?? undefined));
+      // A background process (e.g. "npm run dev &") can keep the output open after the
+      // command itself has ended; finish shortly after the shell exits rather than wait.
+      child.on('exit', (code) => setTimeout(() => done(code ?? undefined), EXIT_DRAIN_MS));
     });
   }
 

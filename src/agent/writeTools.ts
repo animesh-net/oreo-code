@@ -13,6 +13,8 @@ export interface WritableWorkspace extends Workspace {
   exists(path: string): Promise<boolean>;
   writeFile(path: string, text: string): Promise<void>;
   deleteFile(path: string): Promise<void>;
+  /** Files open with unsaved changes, which a command can't see. */
+  unsavedFiles?(): string[];
   /** Why the path can't be written (a symbolic link, or outside the folder), or undefined. */
   writeProblem?(path: string): Promise<string | undefined>;
   /** Runs a command line in the folder's root with the user's shell. */
@@ -200,7 +202,11 @@ export async function applyWrite(
         : result.exitCode === undefined
           ? 'Stopped.'
           : `Exit code ${result.exitCode}.`;
-      return `${status}\n${keepEnds(result.output.trim(), MAX_COMMAND_OUTPUT_CHARS) || '(no output)'}`;
+      const unsaved = ws.unsavedFiles?.() ?? [];
+      const note = unsaved.length
+        ? `\nNote: ${unsaved.join(', ')} ${unsaved.length === 1 ? 'has' : 'have'} unsaved changes in the editor, which this command didn't see.`
+        : '';
+      return `${status}\n${keepEnds(result.output.trim(), MAX_COMMAND_OUTPUT_CHARS) || '(no output)'}${note}`;
     }
   }
 }
@@ -269,7 +275,24 @@ export function cleanPath(path: string): string {
     .replace(/^(\.\/)+/, '');
 }
 
+/**
+ * Replaces oldText once. A file with Windows line endings (common in .NET repos) is
+ * matched and written with \r\n, since models send plain \n.
+ */
 function replaceOnce(
+  text: string,
+  oldText: string,
+  newText: string,
+  path: string,
+): { text: string } | { error: string } {
+  if (text.includes('\r\n') && !text.includes(oldText) && !oldText.includes('\r')) {
+    const crlf = (s: string) => s.replace(/\r?\n/g, '\r\n');
+    return replaceExactlyOnce(text, crlf(oldText), crlf(newText), path);
+  }
+  return replaceExactlyOnce(text, oldText, newText, path);
+}
+
+function replaceExactlyOnce(
   text: string,
   oldText: string,
   newText: string,

@@ -231,6 +231,31 @@ describe('write tools', () => {
     expect('error' in create && create.error).toMatch(/symbolic link/);
   });
 
+  it('edits a file with Windows line endings and keeps them', async () => {
+    const ws = memoryWorkspace({ 'Program.cs': 'class A\r\n{\r\n    int x = 1;\r\n}\r\n' });
+    const prepared = await prepareWrite(
+      ws,
+      call('edit_file', {
+        path: 'Program.cs',
+        old_text: '{\n    int x = 1;',
+        new_text: '{\n    int x = 2;\n    int y = 3;',
+      }),
+    );
+    if (!('pending' in prepared)) throw new Error(`expected pending: ${JSON.stringify(prepared)}`);
+    await applyWrite(ws, prepared.pending, new AbortController().signal, () => {});
+    expect(ws.files['Program.cs']).toBe('class A\r\n{\r\n    int x = 2;\r\n    int y = 3;\r\n}\r\n');
+  });
+
+  it("tells the model which unsaved files a command couldn't see", async () => {
+    const ws = memoryWorkspace({});
+    ws.unsavedFiles = () => ['src/a.ts'];
+    const prepared = await prepareWrite(ws, call('run_command', { command: 'npm test' }));
+    if (!('pending' in prepared)) throw new Error('expected pending');
+    expect(await applyWrite(ws, prepared.pending, new AbortController().signal, () => {})).toMatch(
+      /src\/a\.ts has unsaved changes in the editor/,
+    );
+  });
+
   it('checks an edit again when the file changed after the card was shown', async () => {
     const ws = memoryWorkspace({ 'a.ts': 'one\n' });
     const prepared = await prepareWrite(ws, call('edit_file', { path: 'a.ts', old_text: 'one', new_text: 'two' }));
