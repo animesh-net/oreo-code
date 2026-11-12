@@ -122,8 +122,16 @@ export async function runAgent(deps: AgentDeps): Promise<AgentResult> {
       continue; // Same step again, on the Mac.
     }
     n++;
+    // The last round offers no tools; a call the model makes anyway isn't run.
+    if (!offered) calls = undefined;
     if (!calls?.length) break;
 
+    // Every call needs a unique id for its result to point at; some models leave it out.
+    const seen = new Set<string>();
+    calls.forEach((call, i) => {
+      if (!call.id || seen.has(call.id)) call.id = `call_${n}_${i}`;
+      seen.add(call.id);
+    });
     deps.wire.push({ role: 'assistant', content: text, tool_calls: calls });
     let malformed = false;
     for (const call of calls) {
@@ -131,13 +139,22 @@ export async function runAgent(deps: AgentDeps): Promise<AgentResult> {
       const problem = malformedProblem(call, toolNames);
       if (problem) {
         malformed = true;
+        // Ollama rejects a conversation that carries arguments it can't parse, which
+        // would fail the retry; the error result tells the model what went wrong.
+        if (!isJsonObject(call.function.arguments)) call.function.arguments = '{}';
         step({ title: `Couldn't use ${call.function.name || 'a tool'}`, detail: problem, outcome: 'error' });
         deps.wire.push({ role: 'tool', tool_call_id: call.id, content: problem });
         continue;
       }
-      const result = isWriteTool(call.function.name)
-        ? await runWrite(deps, call, step)
-        : await runRead(deps, call, step);
+      let result: string;
+      try {
+        result = isWriteTool(call.function.name) ? await runWrite(deps, call, step) : await runRead(deps, call, step);
+      } catch (err) {
+        if (deps.signal.aborted) throw err;
+        // A tool that fails tells the model, which can try another way; the task goes on.
+        result = `Error: ${(err as Error).message}`;
+        step({ title: `${call.function.name} failed`, detail: result, outcome: 'error' });
+      }
       deps.wire.push({ role: 'tool', tool_call_id: call.id, content: result });
     }
     if (malformed) {
@@ -224,6 +241,15 @@ export function malformedProblem(call: ToolCall, toolNames: ReadonlySet<string>)
     return 'Error: arguments were not valid JSON. Send them as a JSON object.';
   }
   return undefined;
+}
+
+function isJsonObject(text: string): boolean {
+  try {
+    const v: unknown = JSON.parse(text || '{}');
+    return !!v && typeof v === 'object' && !Array.isArray(v);
+  } catch {
+    return false;
+  }
 }
 
 function detail(call: ToolCall, result: string): string {

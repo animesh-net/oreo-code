@@ -312,6 +312,16 @@ describe('approval policy', () => {
       'Directory.Build.props',
       'pyproject.toml',
       '.envrc',
+      '.npmrc',
+      'package-lock.json',
+      'web/pnpm-lock.yaml',
+      'nuget.config',
+      'global.json',
+      'requirements-dev.txt',
+      'vitest.config.ts',
+      'web/vite.config.mjs',
+      '.eslintrc.cjs',
+      'esbuild.mjs',
     ]) {
       expect(needsApproval('edit_file', true, path)).toBe(true);
       expect(needsApproval('create_file', true, path)).toBe(true);
@@ -471,6 +481,53 @@ describe('agent loop', () => {
     expect(result.model.id).toBe('oreo-4b');
     expect(moves).toEqual(['oreo-4b']);
     expect(d.steps.some((s) => /moved to Oreo 4B/.test(s.title))).toBe(true);
+  });
+
+  it('gives calls without an id, or with a repeated one, their own id', async () => {
+    const ws = memoryWorkspace({ 'a.ts': 'x' });
+    const client = scripted([
+      [call('list_files', {}, ''), call('list_files', {}, 'same'), call('list_files', {}, 'same')],
+      'Done.',
+    ]);
+    const d = deps(client, ws);
+    await runAgent(d);
+    const ids = d.wire.filter((m) => m.role === 'tool').map((m) => (m.role === 'tool' ? m.tool_call_id : ''));
+    expect(new Set(ids).size).toBe(3);
+    expect(ids.every(Boolean)).toBe(true);
+  });
+
+  it('replaces unparseable arguments in the conversation so the retry is not rejected', async () => {
+    const ws = memoryWorkspace({});
+    const bad: ToolCall = { id: 'c1', type: 'function', function: { name: 'list_files', arguments: '{oops' } };
+    const client = scripted([[bad], 'Done.']);
+    const d = deps(client, ws);
+    await runAgent(d);
+    const sent = client.calls[1].wire.find((m) => m.role === 'assistant' && m.tool_calls);
+    expect(sent?.role === 'assistant' && sent.tool_calls?.[0].function.arguments).toBe('{}');
+  });
+
+  it('does not run a call the model makes on the last round, which offers no tools', async () => {
+    const ws = memoryWorkspace({ 'a.ts': 'x' });
+    const edit = call('edit_file', { path: 'a.ts', old_text: 'x', new_text: 'y' });
+    const client = scripted([[call('list_files', {})], [edit], 'Summary.']);
+    const d = deps(client, ws, { maxSteps: 2 });
+    await runAgent(d);
+    expect(d.approvals).toHaveLength(0);
+    expect(ws.files['a.ts']).toBe('x');
+  });
+
+  it('sends a failing tool back to the model instead of ending the task', async () => {
+    const ws = memoryWorkspace({ 'a.ts': 'x' });
+    const client = scripted([[call('find_symbol', { name: 'X' })], 'Recovered.']);
+    const d = deps(client, ws, {
+      readTools: [...WORKSPACE_TOOLS, FIND_SYMBOL_TOOL],
+      runRead: async () => {
+        throw new Error('index broke');
+      },
+    });
+    const result = await runAgent(d);
+    expect(result.reply).toBe('Recovered.');
+    expect(client.calls[1].wire.some((m) => m.role === 'tool' && m.content === 'Error: index broke')).toBe(true);
   });
 
   it('keeps the finished work when only the closing summary fails', async () => {

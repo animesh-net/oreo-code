@@ -69,6 +69,15 @@ const RUNS_CODE = [
   /\.(sh|bash|zsh|command|ps1|bat|cmd)$/i,
   /\.(csproj|fsproj|vbproj|props|targets|sln|slnx)$/i,
   /(^|\/)(setup\.py|pyproject\.toml|tox\.ini|noxfile\.py|conftest\.py|build\.gradle(\.kts)?|pom\.xml)$/i,
+  // Package settings and lists: installs run the packages' own scripts.
+  /(^|\/)\.npmrc$/i,
+  /(^|\/)(package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|pnpm-workspace\.yaml|bun\.lockb?)$/i,
+  /(^|\/)(nuget\.config|global\.json|packages\.lock\.json)$/i,
+  /(^|\/)(requirements[^/]*\.txt|pipfile(\.lock)?|poetry\.lock|uv\.lock|gemfile(\.lock)?|rakefile|cargo\.toml|build\.rs|go\.mod)$/i,
+  // Tool configs that are code, loaded when tests, linters or builds run.
+  /(^|\/)[^/]+\.config\.(js|cjs|mjs|ts|cts|mts)$/i,
+  /(^|\/)(\.eslintrc|\.prettierrc|\.mocharc|\.babelrc|babel\.config|\.stylelintrc)(\.(js|cjs|mjs|ts))$/i,
+  /(^|\/)esbuild\.(js|cjs|mjs|ts)$/i,
 ];
 
 export function runsCode(path: string): boolean {

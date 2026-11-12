@@ -180,7 +180,8 @@ commit, pull request) through the local `github-mcp-server` over stdio.
   every write tool through `needsApproval` (`src/agent/policy.ts`): `run_command`
   always asks; `edit_file` and `create_file` ask unless "Approve edits for this task"
   is on, which resets when the task ends and never covers a file that decides what
-  runs (`runsCode`: scripts, hooks, build, CI and editor task files). The card shows
+  runs (`runsCode`: scripts, hooks, build, CI, package lists and settings,
+  code-based tool configs and editor task files). The card shows
   the whole change, never a cut one (`MAX_WRITE_CHARS` caps file size instead), and a
   command with hidden or control characters is refused. A rejection goes back to the model; Stop
   counts as one. `writePathProblem` refuses absolute paths, `.`/`..`, `.git` at any depth
@@ -190,7 +191,9 @@ commit, pull request) through the local `github-mcp-server` over stdio.
   applied. Every file is remembered in the task's `Checkpoint` before it changes, so
   "Undo task" can restore it; undo leaves a file alone if it changed after the task
   wrote it, and a task that changes nothing keeps the last task's undo. `fitToContext`
-  counts tool-call arguments and trims those of calls already made. `MAX_AGENT_STEPS` is the only step limit. Agent mode is
+  counts tool-call arguments and trims those of calls already made. A tool that fails goes back to the model as an error; the task goes on. Calls get unique ids, unparseable
+  arguments are replaced with `{}` in the conversation, and the last round (no tools offered) runs no calls.
+  `MAX_AGENT_STEPS` is the only step limit. Agent mode is
   offered only for models with `supportsTools: true`; `find_symbol` reads the one
   symbol index completion keeps, never a second one.
 - **Workspace tools only read.** `src/agent/workspaceTools.ts` reads only files in the
