@@ -137,6 +137,8 @@ commit, pull request) through the local `github-mcp-server` over stdio.
 | `src/update/`                       | Self-update: newest GitHub release, with a token if there is one, else none (public repo)                                  |
 | `src/shared/protocol.ts`            | Messages between the extension and the webview; both bundles compile with it                                               |
 | `webview-ui/`                       | Preact chat UI, bundled to `dist/webview.js`                                                                               |
+| `test/e2e.test.ts`                  | Agent mode end to end on real projects on disk (`test/support/`), with a scripted model                                    |
+| `test/eval/`                        | `npm run eval`: the same fixture tasks against a real model on Ollama; not in `npm test` or CI                             |
 | `test/`                             | Vitest unit tests                                                                                                          |
 | `scripts/`                          | README link check and the PR description cleaner (shared with oreo-ai)                                                     |
 | `.github/workflows/`                | CI (a `v<major>.<minor>.<n>` release per main build), PR description cleaner, Dependabot merge                             |
@@ -205,7 +207,12 @@ commit, pull request) through the local `github-mcp-server` over stdio.
   is told to do it, up to `MAX_NUDGES` times; a reply that claims changes (`claimsChanges`:
   not negated, not about an earlier task) when the task changed no file and ran no
   command is questioned once, and if it still makes none the reply ends with a note that
-  the task didn't change any file. `MAX_AGENT_STEPS` is the only step limit; ending at it
+  the task didn't change any file. `replace_lines` (by read_file's line numbers; its result
+  shows the changed lines with their new numbers) and `write_file` (a whole existing file
+  up to `MAX_REWRITE_CHARS`, refusing "rest unchanged" placeholders) become an `edit_file`
+  of the whole file, so they share its approval, `runsCode`, Undo and error checks: small
+  models like Oreo 4B can't reliably copy exact text. Agent calls use `AGENT_TEMPERATURE`
+  (0.2) for steadier tool calls. `MAX_AGENT_STEPS` is the only step limit; ending at it
   mid-way adds a note saying so. `run_command` refuses commands that only read or list
   files (`READS_FILES`), pointing to read_file, list_files and search.
 - **Agent mode ends with working code, on its own.** The root `AGENTS.md`, `CLAUDE.md`
@@ -248,6 +255,10 @@ npx prettier --check .
 npm run check      # typecheck (extension + webview), vitest, esbuild
 npm run package    # if package.json, .vscodeignore or esbuild.mjs changed
 ```
+
+A change to agent mode keeps `test/e2e.test.ts` passing (each fixture task must end with
+the fixture's own check passing) and adds a case there for any new model behaviour it
+handles; `npm run eval` on the Mac measures it with the real Oreo 4B.
 
 `.husky/pre-commit` formats staged files with Prettier and checks README links;
 `.husky/commit-msg` rejects AI attribution trailers. CI checks the PR title, the
