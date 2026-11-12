@@ -222,6 +222,15 @@ describe('write tools', () => {
     expect(ws.files['a.ts']).toBe('let  y=1\n');
   });
 
+  it('refuses a symbolic link or a path outside the folder before showing a card', async () => {
+    const ws = memoryWorkspace({ 'link.ts': 'x' });
+    ws.writeProblem = async (p) => (p === 'link.ts' || p.startsWith('out/') ? `${p} is a symbolic link.` : undefined);
+    const edit = await prepareWrite(ws, call('edit_file', { path: 'link.ts', old_text: 'x', new_text: 'y' }));
+    expect('error' in edit && edit.error).toMatch(/symbolic link/);
+    const create = await prepareWrite(ws, call('create_file', { path: 'out/new.ts', content: 'y' }));
+    expect('error' in create && create.error).toMatch(/symbolic link/);
+  });
+
   it('checks an edit again when the file changed after the card was shown', async () => {
     const ws = memoryWorkspace({ 'a.ts': 'one\n' });
     const prepared = await prepareWrite(ws, call('edit_file', { path: 'a.ts', old_text: 'one', new_text: 'two' }));
@@ -300,6 +309,15 @@ describe('checkpoint', () => {
     expect(await cp.restore(ws)).toEqual({ restored: ['new.ts', 'a.ts'], changed: [], failed: [] });
     expect(ws.files).toEqual({ 'a.ts': 'v1' });
     expect(cp.isEmpty).toBe(true);
+  });
+
+  it("tells when the task first changes a file, so a task without writes keeps the last task's undo", () => {
+    let replaced = 0;
+    const cp = new Checkpoint(() => replaced++);
+    expect(replaced).toBe(0);
+    cp.remember({ path: 'a.ts', before: 'v1', after: 'v2' });
+    cp.remember({ path: 'b.ts', before: 'v1', after: 'v2' });
+    expect(replaced).toBe(1);
   });
 
   it('leaves a file alone when it changed after the task wrote it', async () => {
@@ -461,6 +479,27 @@ describe('agent loop', () => {
     await expect(runAgent(d)).rejects.toThrow('Stopped.');
     expect(ws.files['a.ts']).toBe('x');
     expect(client.calls).toHaveLength(1);
+  });
+
+  it('trims the long arguments of calls already made when the context is full', () => {
+    const big = 'z'.repeat(5_000);
+    const wire: WireMessage[] = [
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: 'Make it' },
+      {
+        role: 'assistant',
+        content: '',
+        tool_calls: [call('create_file', { path: 'big.ts', content: big }), call('list_files', {}, 'c2')],
+      },
+      { role: 'tool', tool_call_id: 'c1', content: 'Created big.ts.' },
+      { role: 'tool', tool_call_id: 'c2', content: 'big.ts' },
+    ];
+    fitToContext(wire, 1, 1_000);
+    const calls = wire[2].role === 'assistant' ? (wire[2].tool_calls ?? []) : [];
+    expect(JSON.parse(calls[0].function.arguments)).toMatchObject({ path: 'big.ts' });
+    expect(calls[0].function.arguments.length).toBeLessThan(300);
+    expect(calls[1].function.arguments).toBe('{}');
+    expect(wire).toHaveLength(5); // the task and every call keep their results
   });
 
   it('knows Cloudflare limit errors from other failures', () => {

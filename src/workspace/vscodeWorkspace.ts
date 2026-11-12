@@ -53,6 +53,15 @@ class FolderWorkspace implements WritableWorkspace {
    * may not be a symlink, and its nearest existing folder must resolve inside the
    * folder's real path.
    */
+  async writeProblem(path: string): Promise<string | undefined> {
+    try {
+      await this.assertInside(path);
+      return undefined;
+    } catch (err) {
+      return (err as Error).message;
+    }
+  }
+
   private async assertInside(path: string): Promise<void> {
     const target = this.uri(path).fsPath;
     const root = await realpath(this.root);

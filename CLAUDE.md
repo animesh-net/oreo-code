@@ -185,10 +185,11 @@ commit, pull request) through the local `github-mcp-server` over stdio.
   command with hidden or control characters is refused. A rejection goes back to the model; Stop
   counts as one. `writePathProblem` refuses absolute paths, `.`/`..`, `.git` at any depth
   and secret files, in any letter case; the workspace refuses writes through symbolic
-  links or outside the folder's real path; an edit's `old_text` must match exactly once, checked again when
+  links or outside the folder's real path, checked before the card and again on write; an edit's `old_text` must match exactly once, checked again when
   applied. Every file is remembered in the task's `Checkpoint` before it changes, so
   "Undo task" can restore it; undo leaves a file alone if it changed after the task
-  wrote it. `MAX_AGENT_STEPS` is the only step limit. Agent mode is
+  wrote it, and a task that changes nothing keeps the last task's undo. `fitToContext`
+  counts tool-call arguments and trims those of calls already made. `MAX_AGENT_STEPS` is the only step limit. Agent mode is
   offered only for models with `supportsTools: true`; `find_symbol` reads the one
   symbol index completion keeps, never a second one.
 - **Workspace tools only read.** `src/agent/workspaceTools.ts` reads only files in the

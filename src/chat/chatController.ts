@@ -81,7 +81,15 @@ const REMOVED = '(Removed to fit the context window.)';
  * replaced by a note. Returns the question's new index.
  */
 export function fitToContext(wire: WireMessage[], question: number, max = MAX_PROMPT_CHARS): number {
-  const size = () => wire.reduce((n, m) => n + m.content.length, 0);
+  // A tool call's arguments count too: create_file sends a whole file in them.
+  const size = () =>
+    wire.reduce(
+      (n, m) =>
+        n +
+        m.content.length +
+        (m.role === 'assistant' ? (m.tool_calls ?? []).reduce((k, t) => k + t.function.arguments.length, 0) : 0),
+      0,
+    );
   // Earlier turns sit between the system prompt (0) and the current question.
   while (size() > max && question > 1) {
     wire.splice(1, 1);
@@ -91,8 +99,27 @@ export function fitToContext(wire: WireMessage[], question: number, max = MAX_PR
     if (size() <= max) break;
     if (m.role === 'tool' && m.content !== REMOVED) m.content = REMOVED;
   }
+  // Then the long arguments of calls already made, oldest first, keeping the path so
+  // the model still knows which file it wrote. The arguments stay valid JSON.
+  for (const m of wire) {
+    if (size() <= max) break;
+    if (m.role !== 'assistant' || !m.tool_calls) continue;
+    for (const t of m.tool_calls) {
+      if (t.function.arguments.length <= SHORT_ARGUMENTS) continue;
+      let path: unknown;
+      try {
+        path = (JSON.parse(t.function.arguments) as { path?: unknown }).path;
+      } catch {
+        // Not JSON: nothing worth keeping.
+      }
+      t.function.arguments = JSON.stringify(typeof path === 'string' ? { path, note: REMOVED } : { note: REMOVED });
+    }
+  }
   return question;
 }
+
+/** Tool-call arguments up to this length are kept when trimming. */
+const SHORT_ARGUMENTS = 300;
 
 /** How much of each earlier answer goes back to the model; the latest goes back whole. */
 export const MAX_EARLIER_REPLY_CHARS = 1_500;
@@ -456,8 +483,10 @@ export class ChatController {
     signal: AbortSignal,
     on: { onText(delta: string): void; onStep(step: AgentStep): void; onMove(model: ModelInfo): void },
   ) {
-    const checkpoint = new Checkpoint();
-    this.checkpoint = checkpoint;
+    // Replaces the last task's undo only once this task changes a file.
+    const checkpoint = new Checkpoint(() => {
+      this.checkpoint = checkpoint;
+    });
     const findSymbol = this.deps.findSymbol;
     const wire: WireMessage[] = [
       { role: 'system', content: await buildSystemPrompt(ws, true, true) },
@@ -530,7 +559,16 @@ export class ChatController {
     const checkpoint = this.checkpoint;
     const ws = this.deps.getWritableWorkspace?.();
     if (this.busy || !checkpoint || checkpoint.isEmpty || !ws) return;
-    const { restored, changed, failed } = await checkpoint.restore(ws);
+    // Busy while files are put back, so no new task starts in the middle of it.
+    this.busy = true;
+    this.publish();
+    let result: Awaited<ReturnType<Checkpoint['restore']>>;
+    try {
+      result = await checkpoint.restore(ws);
+    } finally {
+      this.busy = false;
+    }
+    const { restored, changed, failed } = result;
     this.checkpoint = undefined;
     this.messages.push({
       role: 'assistant',

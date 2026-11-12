@@ -19,8 +19,12 @@ export class Checkpoint {
   private readonly originals = new Map<string, string | undefined>();
   private readonly lastWritten = new Map<string, string>();
 
+  /** `onFirstChange` runs when the task first changes a file. */
+  constructor(private readonly onFirstChange?: () => void) {}
+
   /** Remembers a file's first state, and the latest text the task writes to it. */
   remember(entry: BeforeWrite): void {
+    if (this.originals.size === 0) this.onFirstChange?.();
     if (!this.originals.has(entry.path)) this.originals.set(entry.path, entry.before);
     this.lastWritten.set(entry.path, entry.after);
   }

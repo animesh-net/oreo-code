@@ -13,6 +13,8 @@ export interface WritableWorkspace extends Workspace {
   exists(path: string): Promise<boolean>;
   writeFile(path: string, text: string): Promise<void>;
   deleteFile(path: string): Promise<void>;
+  /** Why the path can't be written (a symbolic link, or outside the folder), or undefined. */
+  writeProblem?(path: string): Promise<string | undefined>;
   /** Runs a command line in the folder's root with the user's shell. */
   runCommand(command: string, signal: AbortSignal): Promise<CommandResult>;
 }
@@ -117,6 +119,8 @@ export async function prepareWrite(
       if (!oldText) return { error: 'Error: old_text is empty. Copy the exact text to replace from read_file.' };
       if (newText === undefined) return { error: 'Error: new_text is missing.' };
       if (!(await ws.exists(path))) return { error: `Error: ${path} doesn't exist. Use create_file for a new file.` };
+      const blocked = await ws.writeProblem?.(path);
+      if (blocked) return { error: `Error: ${blocked}` };
       let text: string;
       try {
         text = await ws.readFile(path);
@@ -135,6 +139,8 @@ export async function prepareWrite(
       const content = str('content') ?? '';
       if (content.length > MAX_WRITE_CHARS) return { error: tooLarge(path) };
       if (await ws.exists(path)) return { error: `Error: ${path} already exists. Use edit_file to change it.` };
+      const blocked = await ws.writeProblem?.(path);
+      if (blocked) return { error: `Error: ${blocked}` };
       return { pending: { kind: 'create_file', path, content, diff: makeDiff(path, undefined, content) } };
     }
     case 'run_command': {
