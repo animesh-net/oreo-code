@@ -411,8 +411,9 @@ async function verifyWork(
       step({ title: `Skipped the project check \`${deps.checkCommand}\` (rejected)`, outcome: 'rejected' });
     }
   }
-  // No project check: at least parse the changed files. Parsing runs no code, so no card.
-  if (!deps.checkCommand) {
+  // No project check, or you rejected it: at least parse the changed files. Parsing runs
+  // no code, so no card.
+  if (!deps.checkCommand || !check.allowed) {
     const syntax = syntaxCheckCommand([...baseline.keys(), ...deps.checkpoint.files].filter(unique));
     if (syntax) {
       const result = await deps.workspace.runCommand(syntax, deps.signal);

@@ -1173,6 +1173,25 @@ describe('step limit, file-reading commands and the syntax check', () => {
     expect(syntaxCheckCommand(['server/start.js', 'App.jsx', 'README.md'])).toBeUndefined();
   });
 
+  it('still checks Python syntax when you reject the project check', async () => {
+    const ws = memoryWorkspace({ 'a.py': 'x = 1' });
+    const client = scripted([[call('edit_file', { path: 'a.py', old_text: 'x = 1', new_text: 'x = 2' })], 'Done.']);
+    const d = deps(client, ws, {
+      approveEdits: () => true,
+      checkCommand: 'pytest',
+      requestApproval: async () => false,
+    });
+    await runAgent(d);
+    expect(ws.commands).toHaveLength(1);
+    expect(ws.commands[0]).toMatch(/^python3 -c .*'a\.py'$/);
+    expect(d.steps.map((s) => s.title)).toEqual(
+      expect.arrayContaining([
+        'Skipped the project check `pytest` (rejected)',
+        'Checked the syntax of the changed Python files: passed',
+      ]),
+    );
+  });
+
   it('skips the Python syntax check when python3 is not installed', async () => {
     const ws = memoryWorkspace({ 'a.py': 'x = 1' });
     ws.runCommand = async (command) => {
