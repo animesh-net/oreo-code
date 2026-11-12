@@ -30,6 +30,9 @@ export const MALFORMED_TWICE =
   "The model sent tool calls it couldn't make twice in a row, so the task stopped. Try again, or pick a larger model.";
 const REJECTED = 'The user rejected this. Do not try it again; ask what they want instead, or take another approach.';
 
+/** Agent mode's sampling temperature: low, so small models (Oreo 4B) keep to the tool format. */
+export const AGENT_TEMPERATURE = 0.2;
+
 /** How many times a task may be told to carry out what it announced. */
 export const MAX_NUDGES = 3;
 const GO_ON =
@@ -192,6 +195,7 @@ export async function runAgent(deps: AgentDeps): Promise<AgentResult> {
         deps.signal,
         deps.effort,
         offered,
+        AGENT_TEMPERATURE,
       )) {
         if (event.type === 'toolCalls') {
           calls = event.calls;

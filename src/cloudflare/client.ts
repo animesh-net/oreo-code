@@ -76,6 +76,7 @@ export class CloudflareClient implements ModelClient {
     signal: AbortSignal,
     effort: ReasoningEffort,
     tools?: FunctionTool[],
+    temperature?: number,
   ): AsyncIterable<StreamEvent> {
     const levels = OREO_MODELS.find((m) => m.id === model)?.thinking === 'levels';
     const think = effort !== 'none';
@@ -87,6 +88,7 @@ export class CloudflareClient implements ModelClient {
         max_tokens: levels || think ? MAX_OUTPUT_TOKENS * 2 : MAX_OUTPUT_TOKENS,
         ...(levels ? { reasoning_effort: think ? effort : 'low' } : {}),
         ...(tools?.length ? { tools } : {}),
+        ...(temperature !== undefined ? { temperature } : {}),
       },
       { signal },
     );

@@ -5,6 +5,7 @@ import { describeProblems, Instructions, newProblems, type Problem } from '../sr
 import { detectCheckCommand, syntaxCheckCommand } from '../src/agent/verify';
 import { FIND_SYMBOL_TOOL, runFindSymbol } from '../src/agent/findSymbol';
 import {
+  AGENT_TEMPERATURE,
   announcesAction,
   claimsChanges,
   MALFORMED_TWICE,
@@ -21,6 +22,9 @@ import {
   prepareWrite,
   closestText,
   commandEnv,
+  MAX_REWRITE_CHARS,
+  replaceLines,
+  rewriteFile,
   findIgnoringWhitespace,
   keepEnds,
   MAX_WRITE_CHARS,
@@ -649,6 +653,8 @@ describe('agent mode in the chat', () => {
       'search',
       'find_symbol',
       'edit_file',
+      'replace_lines',
+      'write_file',
       'create_file',
       'run_command',
     ]);
@@ -1273,5 +1279,93 @@ describe('step limit, file-reading commands and the syntax check', () => {
     const client = scripted([[call('list_files', {})], 'All good: nothing to change.']);
     const result = await runAgent(deps(client, ws, { maxSteps: 2 }));
     expect(result.reply).toBe('All good: nothing to change.');
+  });
+});
+
+describe('edits a small model can make', () => {
+  const file = 'line one\nline two\nline three\nline four\n';
+
+  it('replaces lines by number and reports the new numbering', () => {
+    const r = replaceLines(file, 'a.txt', 2, 3, 'TWO\nTWO-B\nTHREE');
+    if ('error' in r) throw new Error(r.error);
+    expect(r.text).toBe('line one\nTWO\nTWO-B\nTHREE\nline four\n');
+    expect(r.report).toBe(
+      'Lines 1–5 of a.txt now:\n1: line one\n2: TWO\n3: TWO-B\n4: THREE\n5: line four\nLines after this change moved by +1.',
+    );
+  });
+
+  it('inserts with end_line = start_line - 1, deletes with "", and strips copied line numbers', () => {
+    const ins = replaceLines(file, 'a.txt', 2, 1, 'inserted');
+    expect('text' in ins && ins.text).toBe('line one\ninserted\nline two\nline three\nline four\n');
+    const del = replaceLines(file, 'a.txt', 2, 3, '');
+    expect('text' in del && del.text).toBe('line one\nline four\n');
+    const numbered = replaceLines(file, 'a.txt', 4, 4, '4: line FOUR');
+    expect('text' in numbered && numbered.text).toBe('line one\nline two\nline three\nline FOUR\n');
+    const crlf = replaceLines('a\r\nb\r\n', 'w.cs', 2, 2, 'B\nC');
+    expect('text' in crlf && crlf.text).toBe('a\r\nB\r\nC\r\n');
+  });
+
+  it('refuses line numbers that are not in the file', () => {
+    const r = replaceLines(file, 'a.txt', 7, 8, 'x');
+    expect('error' in r && r.error).toMatch(/has 4 lines; lines 7–8 aren't in it/);
+    expect('error' in replaceLines(file, 'a.txt', 'two', 3, 'x')).toBe(true);
+  });
+
+  it('rewrites a small file whole, keeping its line endings, and refuses left-out code', () => {
+    const r = rewriteFile('a\r\nb\r\n', 'w.cs', 'x\ny');
+    expect('text' in r && r.text).toBe('x\r\ny\r\n');
+    for (const content of [
+      'import x;\n// ... rest of the file unchanged',
+      'a();\n...\nb();',
+      '# existing code here\nprint(1)',
+    ]) {
+      expect(rewriteFile('old', 'a.js', content)).toMatchObject({ error: expect.stringMatching(/leaves code out/) });
+    }
+    expect(rewriteFile('x'.repeat(MAX_REWRITE_CHARS + 1), 'big.js', 'y')).toMatchObject({
+      error: expect.stringMatching(/too many to rewrite whole/),
+    });
+    expect('text' in rewriteFile('old', 'a.js', 'const total = items.length; // spread ...rest')).toBe(true);
+  });
+
+  it('applies replace_lines through the usual edit flow, with Undo and the new numbering for the model', async () => {
+    const ws = memoryWorkspace({ 'server/index.js': 'function a() {\n  run(\n}\n' });
+    const client = scripted([
+      [call('replace_lines', { path: 'server/index.js', start_line: 2, end_line: 2, new_text: '  run();' })],
+      'Fixed the call on line 2.',
+    ]);
+    const d = deps(client, ws, { approveEdits: () => true });
+    const result = await runAgent(d);
+    expect(ws.files['server/index.js']).toBe('function a() {\n  run();\n}\n');
+    expect(client.calls[1].wire.at(-1)?.content).toMatch(
+      /Edited server\/index\.js\.\nLines 1–3 of server\/index\.js now:\n1: function a\(\) \{\n2:   run\(\);/,
+    );
+    expect(d.steps[0].title).toBe('Edit server/index.js');
+    expect(result.reply).toBe('Fixed the call on line 2.');
+    expect(await d.checkpoint.restore(ws)).toMatchObject({ restored: ['server/index.js'] });
+    expect(ws.files['server/index.js']).toBe('function a() {\n  run(\n}\n');
+  });
+
+  it('still asks before rewriting a file that decides what runs', async () => {
+    const ws = memoryWorkspace({ 'package.json': '{"scripts":{"test":"vitest"}}' });
+    const client = scripted([
+      [call('write_file', { path: 'package.json', content: '{"scripts":{"test":"node evil.js"}}' })],
+      'Done.',
+    ]);
+    const d = deps(client, ws, { approveEdits: () => true });
+    await runAgent(d);
+    expect(d.approvals.map((p) => p.kind)).toEqual(['edit_file']);
+  });
+
+  it('asks the model for steady output in agent mode', async () => {
+    const ws = memoryWorkspace({});
+    const temps: (number | undefined)[] = [];
+    const client = scripted(['Hi.']);
+    const inner = client.streamChat;
+    client.streamChat = (m, w, s, e, t, temperature) => {
+      temps.push(temperature);
+      return inner(m, w, s, e, t);
+    };
+    await runAgent(deps(client, ws));
+    expect(temps).toEqual([AGENT_TEMPERATURE]);
   });
 });

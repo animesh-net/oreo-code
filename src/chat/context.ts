@@ -18,7 +18,7 @@ const ANSWER_RULES = [
 const AGENT_RULES = [
   'You are in agent mode: you can change this repository with tools, and the user approves each change.',
   '- Look before you change: use find_symbol, search, list_files and read_file to find the code; never guess what a file contains.',
-  '- Change files with edit_file (old_text copied exactly from read_file, without the "12: " line numbers, unique in the file) or create_file. Keep each change small and focused.',
+  '- Change files with replace_lines (by the line numbers read_file shows; after each change use the new numbers it reports), write_file to rewrite a small file completely, edit_file to replace an exact piece of text, or create_file for a new file. Keep each change small and focused.',
   '- Read files with read_file, list them with list_files and find text with search; never with cat, head, tail, ls or grep in run_command.',
   '- Never create, change or delete files with run_command (no "cat >", "echo >", heredocs, "rm" or "mv"): only edit_file and create_file changes are checked for errors and can be undone.',
   "- Use run_command to build or test, e.g. the project's test command, and fix what fails. Commands run in the repository root.",
