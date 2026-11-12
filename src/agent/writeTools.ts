@@ -251,6 +251,59 @@ export function commandEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return { ...clean, CI: '1', FORCE_COLOR: '0', NO_COLOR: '1' };
 }
 
+/** Below this many non-space characters, a whitespace-free match is too likely to be wrong. */
+const MIN_LOOSE_CHARS = 12;
+
+/**
+ * Where `needle` occurs in `text` when all whitespace is ignored, as [start, end) in
+ * `text` from the first to the last non-space character of each match.
+ */
+export function findIgnoringWhitespace(text: string, needle: string): { start: number; end: number }[] {
+  const target = needle.replace(/\s+/g, '');
+  if (target.length < MIN_LOOSE_CHARS) return [];
+  let squeezed = '';
+  const at: number[] = [];
+  for (let i = 0; i < text.length; i++) {
+    if (/\s/.test(text[i])) continue;
+    squeezed += text[i];
+    at.push(i);
+  }
+  const found: { start: number; end: number }[] = [];
+  for (let i = squeezed.indexOf(target); i >= 0; i = squeezed.indexOf(target, i + 1)) {
+    found.push({ start: at[i], end: at[i + target.length - 1] + 1 });
+  }
+  return found;
+}
+
+const MAX_NEAR_CHARS = 1_500;
+
+/**
+ * The lines of `text` most like `oldText` (by shared words), to show the model what is
+ * really there; undefined if nothing is close.
+ */
+export function closestText(text: string, oldText: string): { from: number; to: number; text: string } | undefined {
+  const words = (s: string) => new Set(s.match(/[A-Za-z_$][\w$]*|\d+/g) ?? []);
+  const want = words(oldText);
+  if (!want.size) return undefined;
+  const lines = text.split('\n');
+  const span = Math.max(1, Math.min(12, oldText.trim().split('\n').length));
+  let best = { score: 0, from: 0 };
+  for (let i = 0; i + span <= lines.length || (i === 0 && lines.length < span); i++) {
+    const have = words(lines.slice(i, i + span).join('\n'));
+    let shared = 0;
+    for (const w of want) if (have.has(w)) shared++;
+    const score = shared / want.size;
+    if (score > best.score) best = { score, from: i };
+  }
+  if (best.score < 0.5) return undefined;
+  const chosen = lines.slice(best.from, best.from + span).join('\n');
+  return {
+    from: best.from + 1,
+    to: Math.min(lines.length, best.from + span),
+    text: chosen.length > MAX_NEAR_CHARS ? `${chosen.slice(0, MAX_NEAR_CHARS)}…` : chosen,
+  };
+}
+
 /** One line for the chat and the approval card. */
 export function describeWrite(pending: PendingWrite): string {
   switch (pending.kind) {
@@ -337,8 +390,23 @@ function replaceExactlyOnce(
 ): { text: string } | { error: string } {
   const first = text.indexOf(oldText);
   if (first < 0) {
+    // Models often copy code with the spacing tidied ("return true } catch" for
+    // "return true}catch"). Matching while ignoring whitespace is safe when it's unique.
+    const loose = findIgnoringWhitespace(text, oldText);
+    if (loose.length === 1) {
+      const { start, end } = loose[0];
+      return { text: text.slice(0, start) + newText.trim() + text.slice(end) };
+    }
+    if (loose.length > 1) {
+      return { error: `Error: old_text appears ${loose.length} times in ${path}. Include more lines so it is unique.` };
+    }
+    const near = closestText(text, oldText);
     return {
-      error: `Error: old_text was not found in ${path}. Copy it exactly from read_file, without the "12: " line numbers, with the same spaces and indentation, and include only a few whole lines.`,
+      error:
+        `Error: old_text was not found in ${path}. Copy it exactly from read_file, without the "12: " line numbers, and include only a few whole lines.` +
+        (near
+          ? `\nThe closest text in the file (lines ${near.from}–${near.to}); copy from it exactly:\n${near.text}`
+          : ''),
     };
   }
   let count = 0;
