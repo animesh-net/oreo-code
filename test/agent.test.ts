@@ -9,6 +9,7 @@ import {
   makeDiff,
   prepareWrite,
   keepEnds,
+  MAX_WRITE_CHARS,
   writePathProblem,
   type CommandResult,
   type PendingWrite,
@@ -179,6 +180,48 @@ describe('write tools', () => {
     expect(ws.files['a.ts']).toBe('let x = 1;\nlet y = 2;\n');
   });
 
+  it('refuses a write too large to show whole on the card', async () => {
+    const ws = memoryWorkspace({ 'a.ts': 'x' });
+    const big = 'y'.repeat(MAX_WRITE_CHARS + 1);
+    const created = await prepareWrite(ws, call('create_file', { path: 'big.ts', content: big }));
+    expect('error' in created && created.error).toMatch(/over 200000 characters/);
+    const edited = await prepareWrite(ws, call('edit_file', { path: 'a.ts', old_text: 'x', new_text: big }));
+    expect('error' in edited && edited.error).toMatch(/over 200000 characters/);
+  });
+
+  it('shows the whole change on the card, however long', async () => {
+    const ws = memoryWorkspace({});
+    const content = Array.from({ length: 2000 }, (_, i) => `line ${i}`).join('\n');
+    const prepared = await prepareWrite(ws, call('create_file', { path: 'long.ts', content }));
+    if (!('pending' in prepared) || prepared.pending.kind !== 'create_file') throw new Error('expected pending');
+    expect(prepared.pending.diff).toContain('+line 1999');
+  });
+
+  it('refuses a command with hidden or control characters', async () => {
+    const ws = memoryWorkspace({});
+    for (const command of ['npm test \u202e;rm -rf ~', 'echo hi\u0007', 'ls\u200b']) {
+      const r = await prepareWrite(ws, call('run_command', { command }));
+      expect('error' in r && r.error).toMatch(/hidden or control characters/);
+    }
+    expect('pending' in (await prepareWrite(ws, call('run_command', { command: 'npm test &&\n  npm run lint' })))).toBe(
+      true,
+    );
+  });
+
+  it('remembers what is really saved, so format on save does not block undo', async () => {
+    const ws = memoryWorkspace({ 'a.ts': 'let  y=1\n' });
+    ws.writeFile = async (p, text) => {
+      ws.files[p] = text.replace('y=2', 'y = 2'); // a formatter on save
+    };
+    const prepared = await prepareWrite(ws, call('edit_file', { path: 'a.ts', old_text: 'y=1', new_text: 'y=2' }));
+    if (!('pending' in prepared)) throw new Error('expected pending');
+    const cp = new Checkpoint();
+    await applyWrite(ws, prepared.pending, new AbortController().signal, (e) => cp.remember(e));
+    expect(ws.files['a.ts']).toBe('let  y = 2\n');
+    expect((await cp.restore(ws)).restored).toEqual(['a.ts']);
+    expect(ws.files['a.ts']).toBe('let  y=1\n');
+  });
+
   it('checks an edit again when the file changed after the card was shown', async () => {
     const ws = memoryWorkspace({ 'a.ts': 'one\n' });
     const prepared = await prepareWrite(ws, call('edit_file', { path: 'a.ts', old_text: 'one', new_text: 'two' }));
@@ -220,6 +263,26 @@ describe('approval policy', () => {
     expect(needsApproval('create_file', false)).toBe(true);
     expect(needsApproval('edit_file', true)).toBe(false);
     expect(needsApproval('create_file', true)).toBe(false);
+  });
+
+  it('always asks for files that decide what runs, even with edits approved', () => {
+    for (const path of [
+      'package.json',
+      'web/package.json',
+      '.vscode/tasks.json',
+      '.husky/pre-commit',
+      '.github/workflows/ci.yml',
+      'Makefile',
+      'scripts/deploy.sh',
+      'src/App/App.csproj',
+      'Directory.Build.props',
+      'pyproject.toml',
+      '.envrc',
+    ]) {
+      expect(needsApproval('edit_file', true, path)).toBe(true);
+      expect(needsApproval('create_file', true, path)).toBe(true);
+    }
+    expect(needsApproval('edit_file', true, 'src/app.ts')).toBe(false);
   });
 });
 

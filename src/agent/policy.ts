@@ -57,12 +57,37 @@ function githubWriteProblem(tool: string, args: Record<string, unknown>): string
 }
 
 /**
+ * Files that decide what runs: scripts, hooks, build and CI files, editor tasks. An
+ * edit to one could change what an approved command (e.g. "npm test") or VS Code
+ * does, so it always asks, even with "Approve edits for this task" on.
+ */
+const RUNS_CODE = [
+  /(^|\/)package\.json$/i,
+  /(^|\/)(makefile|gnumakefile|justfile|taskfile\.ya?ml|dockerfile|compose\.ya?ml|docker-compose\.ya?ml)$/i,
+  /(^|\/)\.(vscode|husky|githooks|github|devcontainer|circleci|gitlab-ci)(\/|$)/i,
+  /(^|\/)\.(gitlab-ci\.yml|envrc|yarnrc(\.yml)?|pnpmfile\.cjs|gitattributes|gitmodules)$/i,
+  /\.(sh|bash|zsh|command|ps1|bat|cmd)$/i,
+  /\.(csproj|fsproj|vbproj|props|targets|sln|slnx)$/i,
+  /(^|\/)(setup\.py|pyproject\.toml|tox\.ini|noxfile\.py|conftest\.py|build\.gradle(\.kts)?|pom\.xml)$/i,
+];
+
+export function runsCode(path: string): boolean {
+  return RUNS_CODE.some((re) => re.test(path));
+}
+
+/**
  * Whether agent mode's own write tools (src/agent/writeTools.ts) need your approval.
  * A command always does. Edits and new files do unless you switched on "Approve
- * edits for this task", which covers only those two and only that task.
+ * edits for this task", which covers only those two, only that task, and never a
+ * file that decides what runs (runsCode).
  */
-export function needsApproval(tool: 'edit_file' | 'create_file' | 'run_command', approveEdits: boolean): boolean {
+export function needsApproval(
+  tool: 'edit_file' | 'create_file' | 'run_command',
+  approveEdits: boolean,
+  path?: string,
+): boolean {
   if (tool === 'run_command') return true;
+  if (path !== undefined && runsCode(path)) return true;
   return !approveEdits;
 }
 

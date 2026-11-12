@@ -190,7 +190,7 @@ async function runWrite(deps: AgentDeps, call: ToolCall, step: (s: AgentStep) =>
   }
   const { pending } = prepared;
   const title = describeWrite(pending);
-  if (needsApproval(pending.kind, deps.approveEdits())) {
+  if (needsApproval(pending.kind, deps.approveEdits(), 'path' in pending ? pending.path : undefined)) {
     const approved = await deps.requestApproval(pending);
     if (deps.signal.aborted) throw abortError();
     if (!approved) {

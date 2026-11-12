@@ -179,7 +179,10 @@ commit, pull request) through the local `github-mcp-server` over stdio.
 - **Agent mode writes only with approval.** `runAgent` (`src/agent/loop.ts`) sends
   every write tool through `needsApproval` (`src/agent/policy.ts`): `run_command`
   always asks; `edit_file` and `create_file` ask unless "Approve edits for this task"
-  is on, which resets when the task ends. A rejection goes back to the model; Stop
+  is on, which resets when the task ends and never covers a file that decides what
+  runs (`runsCode`: scripts, hooks, build, CI and editor task files). The card shows
+  the whole change, never a cut one (`MAX_WRITE_CHARS` caps file size instead), and a
+  command with hidden or control characters is refused. A rejection goes back to the model; Stop
   counts as one. `writePathProblem` refuses absolute paths, `.`/`..`, `.git` at any depth
   and secret files, in any letter case; the workspace refuses writes through symbolic
   links or outside the folder's real path; an edit's `old_text` must match exactly once, checked again when

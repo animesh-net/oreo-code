@@ -28,8 +28,11 @@ export interface CommandResult {
 export const COMMAND_TIMEOUT_MS = 120_000;
 /** Output sent back to the model; the rest is cut. */
 export const MAX_COMMAND_OUTPUT_CHARS = 12_000;
-/** How much of a diff the approval card shows. */
-export const MAX_DIFF_CHARS = 8_000;
+/**
+ * The largest file an edit or new file may leave. The approval card shows the whole
+ * change, never a cut one, so what you approve is exactly what is written.
+ */
+export const MAX_WRITE_CHARS = 200_000;
 
 export type WriteToolName = 'edit_file' | 'create_file' | 'run_command';
 
@@ -122,6 +125,7 @@ export async function prepareWrite(
       }
       const found = replaceOnce(text, oldText, newText, path);
       if ('error' in found) return found;
+      if (found.text.length > MAX_WRITE_CHARS) return { error: tooLarge(path) };
       return { pending: { kind: 'edit_file', path, oldText, newText, diff: makeDiff(path, text, found.text) } };
     }
     case 'create_file': {
@@ -129,12 +133,16 @@ export async function prepareWrite(
       const problem = writePathProblem(path);
       if (problem) return { error: problem };
       const content = str('content') ?? '';
+      if (content.length > MAX_WRITE_CHARS) return { error: tooLarge(path) };
       if (await ws.exists(path)) return { error: `Error: ${path} already exists. Use edit_file to change it.` };
       return { pending: { kind: 'create_file', path, content, diff: makeDiff(path, undefined, content) } };
     }
     case 'run_command': {
       const command = (str('command') ?? '').trim();
       if (!command) return { error: 'Error: command is empty.' };
+      if (HIDDEN_CHARS.test(command)) {
+        return { error: 'Error: the command has hidden or control characters. Send it as plain text.' };
+      }
       return { pending: { kind: 'run_command', command } };
     }
     default:
@@ -169,12 +177,14 @@ export async function applyWrite(
       if ('error' in found) return found.error;
       remember({ path: pending.path, before: text, after: found.text });
       await ws.writeFile(pending.path, found.text);
+      remember({ path: pending.path, before: text, after: await settled(ws, pending.path, found.text) });
       return `Edited ${pending.path}.`;
     }
     case 'create_file': {
       if (await ws.exists(pending.path)) return `Error: ${pending.path} already exists.`;
       remember({ path: pending.path, before: undefined, after: pending.content });
       await ws.writeFile(pending.path, pending.content);
+      remember({ path: pending.path, before: undefined, after: await settled(ws, pending.path, pending.content) });
       return `Created ${pending.path}.`;
     }
     case 'run_command': {
@@ -198,6 +208,18 @@ export function keepEnds(text: string, max: number): string {
   const head = Math.floor(max / 4);
   const tail = max - head;
   return `${text.slice(0, head)}\n… (${text.length - max} characters cut) …\n${text.slice(-tail)}`;
+}
+
+/**
+ * The file's text right after a write. Saving an open editor can run format on save,
+ * so undo compares against what is really there, not what was sent.
+ */
+async function settled(ws: WritableWorkspace, path: string, sent: string): Promise<string> {
+  try {
+    return await ws.readFile(path);
+  } catch {
+    return sent;
+  }
 }
 
 /** One line for the chat and the approval card. */
@@ -226,10 +248,12 @@ export function writePathProblem(path: string): string | undefined {
   if (parts.some((p) => p === '')) return `Error: ${path} is not a valid path.`;
   // macOS paths ignore case, so ".GIT/config" is ".git/config"; a nested repository's .git counts too.
   if (parts.some((p) => p.toLowerCase() === '.git')) return 'Error: files in .git are never changed.';
-  if (isSecretPath(path) || isSecretPath(path.toLowerCase())) {
-    return `Error: ${path} may hold secrets and isn't changed.`;
-  }
+  if (isSecretPath(path)) return `Error: ${path} may hold secrets and isn't changed.`;
   return undefined;
+}
+
+function tooLarge(path: string): string {
+  return `Error: ${path} would be over ${MAX_WRITE_CHARS} characters; agent mode only writes smaller files.`;
 }
 
 export function cleanPath(path: string): string {
@@ -285,8 +309,11 @@ export function makeDiff(path: string, before: string | undefined, after: string
     ...b.slice(start, endB).map((l) => `+${l}`),
     ...a.slice(endA, toA).map((l) => ` ${l}`),
   ];
-  const diff = lines.join('\n');
-  return diff.length > MAX_DIFF_CHARS
-    ? `${diff.slice(0, MAX_DIFF_CHARS)}\n… (${diff.length - MAX_DIFF_CHARS} more characters)`
-    : diff;
+  return lines.join('\n');
 }
+
+/**
+ * Characters that can make a command look different from what runs: control
+ * characters (other than tab and newline) and Unicode bidirectional overrides.
+ */
+const HIDDEN_CHARS = /[\u0000-\u0008\u000b-\u001f\u007f\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/;
