@@ -1,6 +1,8 @@
 import { writeFile } from 'node:fs/promises';
-import { afterAll, describe, expect, it } from 'vitest';
+import * as os from 'node:os';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { OllamaClient } from '../../src/ollama/client';
+import { tailscaleOllamaUrls } from '../../src/ollama/url';
 import { DiskWorkspace } from '../support/diskWorkspace';
 import { FIXTURES } from '../support/fixtures';
 import { runTask } from '../support/runTask';
@@ -34,7 +36,41 @@ interface Result {
 }
 const results: Result[] = [];
 
-describe(`agent eval: ${model} at ${ollamaUrl}, ${runs} run(s) per task`, () => {
+/** Like the extension: Ollama on 127.0.0.1, or on the Mac's Tailscale address when it listens there. */
+const connect = {
+  client: (url: string) => new OllamaClient(url),
+  fallbackOllamaUrls: (url: string) => tailscaleOllamaUrls(url, os.networkInterfaces()),
+};
+
+describe(`agent eval: ${model}, ${runs} run(s) per task`, () => {
+  // One clear failure instead of one per run when Ollama or the model isn't there.
+  beforeAll(async () => {
+    const ws = await DiskWorkspace.create({ 'README.md': 'probe\n' });
+    try {
+      const probe = new (await import('../../src/chat/chatController')).ChatController({
+        getOllamaUrl: () => ollamaUrl,
+        getLastModel: () => model,
+        rememberModel: () => {},
+        getEffort: () => undefined,
+        rememberEffort: () => {},
+        createClient: connect.client,
+        fallbackOllamaUrls: connect.fallbackOllamaUrls,
+        post: () => {},
+      });
+      await probe.refresh();
+      const found = probe.state.models.find((m) => m.id === model);
+      if (!found?.available) {
+        throw new Error(
+          probe.state.error ??
+            `${model} isn't installed in Ollama at ${probe.state.ollamaUrl}. Create it from oreo-ai's Modelfile, or set OREO_EVAL_MODEL.`,
+        );
+      }
+      console.log(`Using ${model} at ${probe.state.ollamaUrl}`);
+    } finally {
+      await ws.dispose();
+    }
+  });
+
   for (const fixture of fixtures) {
     for (let run = 1; run <= runs; run++) {
       it(`${fixture.name} #${run}`, async () => {
@@ -43,7 +79,7 @@ describe(`agent eval: ${model} at ${ollamaUrl}, ${runs} run(s) per task`, () => 
         try {
           const outcome = await runTask({
             ws,
-            client: new OllamaClient(ollamaUrl),
+            ...connect,
             modelId: model,
             task: fixture.task,
             ollamaUrl,

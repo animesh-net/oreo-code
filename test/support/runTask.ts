@@ -19,7 +19,10 @@ export interface TaskRun {
  */
 export async function runTask(opts: {
   ws: DiskWorkspace;
-  client: ModelClient;
+  /** A client, or how to make one for an Ollama address (the eval, which may try several). */
+  client: ModelClient | ((ollamaUrl: string) => ModelClient);
+  /** Addresses to try when nothing answers at ollamaUrl, as the extension does (Tailscale). */
+  fallbackOllamaUrls?: (ollamaUrl: string) => string[];
   modelId: string;
   task: string;
   ollamaUrl?: string;
@@ -32,7 +35,8 @@ export async function runTask(opts: {
     getEffort: () => undefined,
     rememberEffort: () => {},
     getAgentSettings: () => ({ agentMode: true, approveEdits: true }),
-    createClient: () => opts.client,
+    createClient: (url) => (typeof opts.client === 'function' ? opts.client(url) : opts.client),
+    ...(opts.fallbackOllamaUrls ? { fallbackOllamaUrls: opts.fallbackOllamaUrls } : {}),
     getWorkspace: () => opts.ws,
     getWritableWorkspace: () => opts.ws,
     post: (m) => posted.push(m),

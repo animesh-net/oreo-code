@@ -61,7 +61,7 @@ Part of the Oreo stack: [oreo-ai](https://github.com/animesh-net/oreo-ai) · [or
 
 ## Develop
 
-Node 22: `npm ci`, then `npm run check` (typecheck, tests, build); **F5** starts an Extension Development Host and `npm run package` builds a VSIX. `npm run eval` runs agent tasks on small broken projects against the Mac's Ollama (`oreo-4b`, 3 runs each; `OREO_EVAL_MODEL`, `OREO_EVAL_RUNS`, `OREO_EVAL_ONLY`) and writes `eval-report.md`. Repo rules are in [CLAUDE.md](CLAUDE.md).
+Node 22: `npm ci`, then `npm run check` (typecheck, tests, build); **F5** starts an Extension Development Host and `npm run package` builds a VSIX. `npm run eval` runs agent tasks on small broken projects against the Mac's Ollama (`oreo-4b`, 3 runs each; `OREO_OLLAMA_URL`, `OREO_EVAL_MODEL`, `OREO_EVAL_RUNS`, `OREO_EVAL_ONLY`; like the extension, it also tries the Mac's Tailscale address) and writes `eval-report.md`. Repo rules are in [CLAUDE.md](CLAUDE.md).
 
 ## License
 
