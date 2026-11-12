@@ -7,7 +7,8 @@ Part of the Oreo stack: [oreo-ai](https://github.com/animesh-net/oreo-ai) · [or
 ## Architecture
 
 - The picker lists the same models as oreo-ai, largest first: `Oreo 120B`, `Oreo 30B`, `Oreo 4B`, `Oreo 2B`, `Oreo 1.5B`.
-- Mac models (`Oreo 4B`, `Oreo 2B`, `Oreo 1.5B`) are called straight on Ollama at `oreo.ollamaUrl`; no sign-in, no server in between. `Oreo 1.5B` is a code-completion model: no thinking and no tools, and only used when you pick it.
+- Mac models (`Oreo 4B`, `Oreo 2B`, `Oreo 1.5B`) are called straight on Ollama at `oreo.ollamaUrl`; no sign-in, no server in between. `Oreo 1.5B` is a code-completion model: no thinking and no tools, and only used in chat when you pick it.
+- Inline completion (ghost text) comes from `Oreo 1.5B` on the Mac's Ollama, about 300 ms after you stop typing. Each request carries snippets from the repo: files the current one imports, definitions of names near the cursor from a local symbol index (TypeScript/JavaScript, C#, Python; updated on save), and the most similar code in open and recently edited files. Secret files and files in `.gitignore` are never read, and nothing goes to oreo-ai or Cloudflare. It pauses while a Mac model is answering in chat. The status bar item shows its state; click it to turn completion on or off.
 - Cloudflare models (`Oreo 120B`, `Oreo 30B`) go through oreo-ai's relay on the Pi at `oreo.cloudUrl`, over Tailscale only; the Pi holds the token. Nothing leaves the Mac unless you pick one.
 - Models with tools can read the open workspace (list, search, read; secret files refused). A local `github-mcp-server` over stdio is set up for the coding agent to come; its writes will need approval.
 - Each message carries the repo's file list and the open file; replies are length-capped and earlier answers go back shortened, so follow-ups answer only what's new.
@@ -21,6 +22,7 @@ Part of the Oreo stack: [oreo-ai](https://github.com/animesh-net/oreo-ai) · [or
 | `src/chat/`        | Chat state, turns, tool loop        |
 | `src/mcp/`         | Pinned `github-mcp-server` host     |
 | `src/agent/`       | Tool catalog, write policy          |
+| `src/completion/`  | Inline completion and symbol index  |
 | `src/update/`      | Self-update from GitHub releases    |
 | `webview-ui/`      | Preact chat UI                      |
 | `test/`            | Vitest unit tests                   |
@@ -47,12 +49,14 @@ Part of the Oreo stack: [oreo-ai](https://github.com/animesh-net/oreo-ai) · [or
 3. Open the **Oreo Code** view in the activity bar and chat.
 4. Optional, for the GitHub tools: run `Oreo Code: Set GitHub token` with a fine-grained token (**Contents** and **Pull requests** read and write on the repos the agent may use).
 
-| Setting               | Default                        | What it is                                       |
-| --------------------- | ------------------------------ | ------------------------------------------------ |
-| `oreo.ollamaUrl`      | `http://127.0.0.1:11434`       | Ollama; the Mac's Tailscale address is tried too |
-| `oreo.cloudUrl`       | `https://ai.animesh.org.in/v1` | oreo-ai's relay; empty turns Cloudflare off      |
-| `oreo.githubMcp.path` | (empty)                        | Own `github-mcp-server`; empty downloads it      |
-| `oreo.autoUpdate`     | `true`                         | Install new releases by itself                   |
+| Setting                             | Default                        | What it is                                       |
+| ----------------------------------- | ------------------------------ | ------------------------------------------------ |
+| `oreo.ollamaUrl`                    | `http://127.0.0.1:11434`       | Ollama; the Mac's Tailscale address is tried too |
+| `oreo.cloudUrl`                     | `https://ai.animesh.org.in/v1` | oreo-ai's relay; empty turns Cloudflare off      |
+| `oreo.githubMcp.path`               | (empty)                        | Own `github-mcp-server`; empty downloads it      |
+| `oreo.autoUpdate`                   | `true`                         | Install new releases by itself                   |
+| `oreo.completion.enabled`           | `true`                         | Inline completion from `Oreo 1.5B`               |
+| `oreo.completion.disabledLanguages` | `["plaintext", "markdown"]`    | Languages without inline completion              |
 
 ## Develop
 

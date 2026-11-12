@@ -22,6 +22,8 @@ export interface ModelInfo {
   maxPromptChars: number;
   /** Lower is picked first when no model is chosen; without one, only picked by hand. */
   defaultRank?: number;
+  /** The Mac model that writes inline code completions; one model has it. */
+  completion?: boolean;
   /** False when Ollama doesn't have the model installed. */
   available: boolean;
 }
