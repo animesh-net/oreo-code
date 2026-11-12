@@ -207,8 +207,9 @@ commit, pull request) through the local `github-mcp-server` over stdio.
   says it's done and the task changed files, the changed files are checked again and the
   project check from `detectCheckCommand` runs; failures go back to the model up to
   `MAX_VERIFY_ROUNDS` times, then the reply says they still fail. None of it needs a
-  setting or an approval; the check command is never read from settings a repository
-  could set. Agent mode is
+  setting; the project check runs code the agent may have changed, so it asks once per
+  task before its first run (rejecting skips it for that task), then runs on its own.
+  The check command is never read from settings a repository could set. Agent mode is
   offered only for models with `supportsTools: true`; `find_symbol` reads the one
   symbol index completion keeps, never a second one.
 - **Workspace tools only read.** `src/agent/workspaceTools.ts` reads only files in the

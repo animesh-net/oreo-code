@@ -845,6 +845,8 @@ describe('repository instructions and checks', () => {
     const d = deps(client, ws, { approveEdits: () => true, checkCommand: 'npm test' });
     const result = await runAgent(d);
     expect(ws.commands).toEqual(['npm test', 'npm test', 'npm test', 'npm test']);
+    // Asked once, before the first run; the later runs go on their own.
+    expect(d.approvals).toEqual([{ kind: 'run_command', command: 'npm test' }]);
     expect(client.calls[2].wire.at(-1)?.content).toMatch(/Not done yet[\s\S]*FAIL a\.test\.ts/);
     expect(result.reply).toMatch(/The checks still fail, so this isn't working yet/);
 
@@ -854,6 +856,26 @@ describe('repository instructions and checks', () => {
     const ok = await runAgent(deps(again, ws, { approveEdits: () => true, checkCommand: 'npm test' }));
     expect(ws.commands).toEqual(['npm test']);
     expect(ok.reply).toBe('Done.');
+  });
+
+  it('skips the project check for the task when you reject it, but still checks for errors', async () => {
+    const ws = memoryWorkspace({ 'a.ts': 'x' });
+    const client = scripted([[call('edit_file', { path: 'a.ts', old_text: 'x', new_text: 'y' })], 'Done.']);
+    const d = deps(client, ws, {
+      approveEdits: () => true,
+      checkCommand: 'npm test',
+      problems: async () => [],
+      requestApproval: async () => false,
+    });
+    const result = await runAgent(d);
+    expect(ws.commands).toEqual([]);
+    expect(result.reply).toBe('Done.');
+    expect(d.steps.map((s) => s.title)).toEqual(
+      expect.arrayContaining([
+        'Checked 1 changed file: no new errors',
+        'Skipped the project check `npm test` (rejected)',
+      ]),
+    );
   });
 
   it('stops checking when the model answers a failure without changing anything', async () => {

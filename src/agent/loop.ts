@@ -105,6 +105,8 @@ export async function runAgent(deps: AgentDeps): Promise<AgentResult> {
   let unresolved: string | undefined;
   /** Files changed so far, and how many had changed at the last check. */
   const progress = { changes: 0 };
+  /** Whether you were asked to allow the project check this task, and the answer. */
+  const check = { asked: false, allowed: false };
   let changesAtCheck = -1;
 
   for (let n = 1; n <= max;) {
@@ -157,7 +159,7 @@ export async function runAgent(deps: AgentDeps): Promise<AgentResult> {
       // failure not its own (e.g. already broken before the task). Report it and stop.
       if (progress.changes === changesAtCheck) break;
       changesAtCheck = progress.changes;
-      const failure = await verifyWork(deps, baseline, step);
+      const failure = await verifyWork(deps, baseline, step, check);
       if (!failure) {
         unresolved = undefined;
         break;
@@ -280,6 +282,7 @@ async function verifyWork(
   deps: AgentDeps,
   baseline: ReadonlyMap<string, Problem[]>,
   step: (s: AgentStep) => void,
+  check: { asked: boolean; allowed: boolean },
 ): Promise<string | undefined> {
   const failures: string[] = [];
   if (deps.problems) {
@@ -297,7 +300,17 @@ async function verifyWork(
       outcome: count ? 'error' : 'ok',
     });
   }
-  if (deps.checkCommand) {
+  // The check runs the project's code, which the agent may have just changed, so it
+  // asks once per task before the first run; after that it runs on its own.
+  if (deps.checkCommand && !check.asked) {
+    check.asked = true;
+    check.allowed = await deps.requestApproval({ kind: 'run_command', command: deps.checkCommand });
+    if (deps.signal.aborted) throw abortError();
+    if (!check.allowed) {
+      step({ title: `Skipped the project check \`${deps.checkCommand}\` (rejected)`, outcome: 'rejected' });
+    }
+  }
+  if (deps.checkCommand && check.allowed) {
     const result = await deps.workspace.runCommand(deps.checkCommand, deps.signal);
     if (deps.signal.aborted) throw abortError();
     const passed = !result.timedOut && result.exitCode === 0;
