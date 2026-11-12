@@ -70,10 +70,26 @@ const ELSEWHEN = /\b(earlier|before|previously|last (task|time)|in the (last|pre
 export function claimsChanges(text: string): boolean {
   for (const m of text.matchAll(CLAIM)) {
     const before = text.slice(Math.max(0, m.index - 40), m.index);
-    const sentence = text.slice(Math.max(0, text.lastIndexOf('.', m.index) + 1), m.index + m[0].length + 60);
-    if (!NEGATED.test(before) && !ELSEWHEN.test(sentence)) return true;
+    if (!NEGATED.test(before) && !ELSEWHEN.test(sentenceAround(text, m.index, m.index + m[0].length))) return true;
   }
   return false;
+}
+
+/** A sentence ends at . ! or ? followed by a space or the end, or at a line break; "index.js" doesn't end one. */
+const SENTENCE_END = /[.!?](?=\s|$)|\n/g;
+
+/** The sentence holding text[from..to]. */
+function sentenceAround(text: string, from: number, to: number): string {
+  let start = 0;
+  let end = text.length;
+  for (const m of text.matchAll(SENTENCE_END)) {
+    if (m.index < from) start = m.index + 1;
+    else if (m.index >= to) {
+      end = m.index;
+      break;
+    }
+  }
+  return text.slice(start, end);
 }
 
 export interface AgentModel {

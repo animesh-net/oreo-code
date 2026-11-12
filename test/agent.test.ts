@@ -990,6 +990,10 @@ describe('claims changes it never made', () => {
     expect(claimsChanges('No files changed.')).toBe(false);
     expect(claimsChanges('In the last task I fixed the import.')).toBe(false);
     expect(claimsChanges('No files changed. I fixed the import in a.js.')).toBe(true);
+    // A dot in a file name doesn't end a sentence; the next sentence isn't part of this one.
+    expect(claimsChanges('Earlier, in server/index.js I fixed the import.')).toBe(false);
+    expect(claimsChanges('I fixed a.js. The bug was there before.')).toBe(true);
+    expect(claimsChanges("I didn't touch b.js, but I fixed a.js.")).toBe(true);
   });
 
   it("doesn't question a claim after a command ran, which may have changed files", async () => {
