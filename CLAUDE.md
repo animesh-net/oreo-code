@@ -213,7 +213,8 @@ commit, pull request) through the local `github-mcp-server` over stdio.
   own `AGENTS.md`/`CLAUDE.md` with the first file read or changed there (`Instructions`,
   within `instructionBudget`). After each edit the result lists the VS Code errors it
   added (`describeProblems`, against the file's errors before the task). When the model
-  says it's done and the task changed files, the changed files are checked again and the
+  says it's done and the task changed files, the changed files are checked again (every error left in them
+  counts, not only new ones, since a repeated message can hide a new error) and the
   project check from `detectCheckCommand` runs (without one, or if you reject it, `syntaxCheckCommand` parses
   the changed Python files, which runs no code and needs no card; JavaScript is left to
   VS Code's own errors, as `node --check` misjudges JSX and Flow by Node version); failures go back to the model up to

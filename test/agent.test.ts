@@ -795,10 +795,36 @@ describe('repository instructions and checks', () => {
     ];
     expect(newProblems(before, after)).toEqual([{ line: 4, message: "';' expected.", source: 'ts' }]);
     expect(describeProblems('a.ts', before, after)).toBe(
-      "Errors in a.ts after this change. Fix them before going on:\n- line 4: ';' expected. (ts)",
+      "Errors in a.ts after this change. Fix them before going on:\n- line 4: ';' expected. (ts)\nIt also still has errors from before this task:\n- line 9: old problem",
     );
-    expect(describeProblems('a.ts', before, [{ line: 1, message: 'old problem' }])).toMatch(/No new errors/);
+    expect(describeProblems('a.ts', before, [{ line: 1, message: 'old problem' }])).toBe(
+      "a.ts still has errors from before this task. Fix them if they're part of the task:\n- line 1: old problem",
+    );
     expect(describeProblems('a.ts', [], [])).toBe('No errors reported for a.ts.');
+  });
+
+  it("doesn't end a task while a changed file still has an error, even one that was there before", async () => {
+    // The edit loses a closing brace in a file that already lacked one: same message, so
+    // only counting new errors would have said "no new errors".
+    const ws = memoryWorkspace({ 'server/index.js': 'function a() {\n  run();\n' });
+    const missing = [{ line: 3, message: "'}' expected." }];
+    const errors: Record<string, Problem[]> = { 'server/index.js': missing };
+    ws.writeFile = async (p, text) => {
+      ws.files[p] = text;
+      errors[p] = text.trimEnd().endsWith('}') ? [] : missing;
+    };
+    const client = scripted([
+      [call('edit_file', { path: 'server/index.js', old_text: '  run();', new_text: '  start();' })],
+      'Done.',
+      [call('edit_file', { path: 'server/index.js', old_text: '  start();', new_text: '  start();\n}' }, 'c2')],
+      'Closed the function.',
+    ]);
+    const d = deps(client, ws, { approveEdits: () => true, problems: async (p) => errors[p] ?? [] });
+    const result = await runAgent(d);
+    expect(d.steps.map((s) => s.title)).toContain('Checked 1 changed file: 1 error left');
+    expect(client.calls[2].wire.at(-1)?.content).toMatch(/still has errors from before this task[\s\S]*'}' expected/);
+    expect(ws.files['server/index.js']).toBe('function a() {\n  start();\n}\n');
+    expect(result.reply).toMatch(/Closed the function\.$/);
   });
 
   it('finds the project check from its files', () => {
@@ -830,7 +856,7 @@ describe('repository instructions and checks', () => {
     const first = client.calls[1].wire.filter((m) => m.role === 'tool').at(-1)?.content;
     expect(first).toMatch(/Errors in a\.ts after this change[\s\S]*line 1: ';' expected\./);
     expect(result.reply).toBe('Fixed.');
-    expect(d.steps.some((s) => /no new errors/.test(s.title))).toBe(true);
+    expect(d.steps.some((s) => /Checked 1 changed file: no errors/.test(s.title))).toBe(true);
   });
 
   it("doesn't let the task end while the project check fails, and says so if it never passes", async () => {
@@ -882,10 +908,7 @@ describe('repository instructions and checks', () => {
     expect(ws.commands).toEqual([]);
     expect(result.reply).toBe('Done.');
     expect(d.steps.map((s) => s.title)).toEqual(
-      expect.arrayContaining([
-        'Checked 1 changed file: no new errors',
-        'Skipped the project check `npm test` (rejected)',
-      ]),
+      expect.arrayContaining(['Checked 1 changed file: no errors', 'Skipped the project check `npm test` (rejected)']),
     );
   });
 

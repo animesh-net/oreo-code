@@ -387,17 +387,22 @@ async function verifyWork(
 ): Promise<string | undefined> {
   const failures: string[] = [];
   if (deps.problems) {
+    // Every error left in a file the task changed counts, not only new ones: a task that
+    // changes a file should leave it working.
     let count = 0;
+    let added = 0;
     for (const [path, before] of baseline) {
       const after = await deps.problems(path, false);
-      const added = newProblems(before, after);
-      if (added.length) {
-        count += added.length;
-        failures.push(describeProblems(path, before, after));
-      }
+      if (!after.length) continue;
+      count += after.length;
+      added += newProblems(before, after).length;
+      failures.push(describeProblems(path, before, after));
     }
+    const files = `${baseline.size} changed file${baseline.size === 1 ? '' : 's'}`;
     step({
-      title: `Checked ${baseline.size} changed file${baseline.size === 1 ? '' : 's'}: ${count ? `${count} new error${count === 1 ? '' : 's'}` : 'no new errors'}`,
+      title: count
+        ? `Checked ${files}: ${count} error${count === 1 ? '' : 's'} left${added ? ` (${added} new)` : ''}`
+        : `Checked ${files}: no errors`,
       outcome: count ? 'error' : 'ok',
     });
   }

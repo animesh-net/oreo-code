@@ -93,16 +93,24 @@ const MAX_PROBLEMS_SHOWN = 10;
 
 /** The line added to a change's result: the errors it introduced, for the model to fix. */
 export function describeProblems(path: string, before: readonly Problem[], after: readonly Problem[]): string {
+  if (!after.length) return `No errors reported for ${path}.`;
   const added = newProblems(before, after);
-  if (!added.length) {
-    return after.length
-      ? `No new errors in ${path} (${after.length} were there before this task).`
-      : `No errors reported for ${path}.`;
-  }
-  const shown = added.slice(0, MAX_PROBLEMS_SHOWN);
+  const older = after.filter((p) => !added.includes(p));
+  const list = (ps: readonly Problem[]) => [
+    ...ps.slice(0, MAX_PROBLEMS_SHOWN).map((p) => `- line ${p.line}: ${p.message}${p.source ? ` (${p.source})` : ''}`),
+    ...(ps.length > MAX_PROBLEMS_SHOWN ? [`- … and ${ps.length - MAX_PROBLEMS_SHOWN} more.`] : []),
+  ];
   return [
-    `Errors in ${path} after this change. Fix them before going on:`,
-    ...shown.map((p) => `- line ${p.line}: ${p.message}${p.source ? ` (${p.source})` : ''}`),
-    ...(added.length > shown.length ? [`- … and ${added.length - shown.length} more.`] : []),
+    ...(added.length ? [`Errors in ${path} after this change. Fix them before going on:`, ...list(added)] : []),
+    // Errors from before the task still matter in a file the task changes: the same
+    // message can also hide a new one (a lost "}" next to an old one).
+    ...(older.length
+      ? [
+          added.length
+            ? 'It also still has errors from before this task:'
+            : `${path} still has errors from before this task. Fix them if they're part of the task:`,
+          ...list(older),
+        ]
+      : []),
   ].join('\n');
 }
