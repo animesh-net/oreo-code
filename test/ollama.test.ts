@@ -22,19 +22,22 @@ function sseResponse(chunks: string[]): Response {
 }
 
 describe('OREO_MODELS', () => {
-  it('offers two models on the Mac and two on Workers AI, the Mac first', () => {
-    expect(OREO_MODELS.map((m) => [m.id, m.provider, m.supportsTools, m.thinking, m.maxPromptChars])).toEqual([
-      ['oreo-4b', 'macbook', true, 'switch', 66_000],
-      ['oreo-2b', 'macbook', false, 'switch', 66_000],
-      ['@cf/qwen/qwen3-30b-a3b-fp8', 'cloudflare', true, 'switch', 66_000],
-      ['@cf/openai/gpt-oss-120b', 'cloudflare', true, 'levels', 200_000],
+  it('offers two models on Workers AI and three on the Mac, largest first as in oreo-ai', () => {
+    expect(
+      OREO_MODELS.map((m) => [m.id, m.provider, m.supportsTools, m.thinking, m.maxPromptChars, m.defaultRank]),
+    ).toEqual([
+      ['@cf/openai/gpt-oss-120b', 'cloudflare', true, 'levels', 200_000, 4],
+      ['@cf/qwen/qwen3-30b-a3b-fp8', 'cloudflare', true, 'switch', 66_000, 3],
+      ['oreo-4b', 'macbook', true, 'switch', 66_000, 1],
+      ['oreo-2b', 'macbook', false, 'switch', 66_000, 2],
+      ['oreo-1.5b', 'macbook', false, 'none', 10_000, undefined],
     ]);
   });
 
   it('names every model "Oreo <size>", and a Mac model\'s id "oreo-<size>"', () => {
-    expect(OREO_MODELS.map((m) => m.name)).toEqual(['Oreo 4B', 'Oreo 2B', 'Oreo 30B', 'Oreo 120B']);
+    expect(OREO_MODELS.map((m) => m.name)).toEqual(['Oreo 120B', 'Oreo 30B', 'Oreo 4B', 'Oreo 2B', 'Oreo 1.5B']);
     for (const m of OREO_MODELS) {
-      expect(m.name).toMatch(/^Oreo \d+B$/);
+      expect(m.name).toMatch(/^Oreo \d+(\.\d+)?B$/);
       if (m.provider === 'macbook') expect(m.id).toBe(m.name.toLowerCase().replace(' ', '-'));
     }
   });
@@ -46,8 +49,9 @@ describe('modelsFromTags', () => {
     expect(models.map((m) => [m.id, m.available])).toEqual([
       ['oreo-4b', true],
       ['oreo-2b', false],
+      ['oreo-1.5b', false],
     ]);
-    expect(modelsFromTags({ models: [{ model: 'oreo-2b' }] }).map((m) => m.available)).toEqual([false, true]);
+    expect(modelsFromTags({ models: [{ model: 'oreo-2b' }] }).map((m) => m.available)).toEqual([false, true, false]);
   });
 
   it('does not match other tags or prefixes', () => {
@@ -71,6 +75,7 @@ describe('OllamaClient', () => {
     expect(models.map((m) => [m.id, m.available])).toEqual([
       ['oreo-4b', false],
       ['oreo-2b', true],
+      ['oreo-1.5b', false],
     ]);
     expect(seen?.url).toBe(`${ollama}/api/tags`);
     expect(seen?.headers.get('authorization')).toBeNull();
@@ -114,10 +119,10 @@ describe('OllamaClient', () => {
     });
   });
 
-  // Every level on both models goes out unchanged; Ollama turns any level but "none"
-  // into thinking on for qwen3.5.
+  // Every level on the thinking Mac models goes out unchanged; Ollama turns any level
+  // but "none" into thinking on for qwen3.5.
   it.each(
-    OREO_MODELS.filter((m) => m.provider === 'macbook').flatMap((m) =>
+    OREO_MODELS.filter((m) => m.provider === 'macbook' && m.thinking !== 'none').flatMap((m) =>
       (['none', 'low', 'medium', 'high'] as const).map((e) => [m.id, e] as const),
     ),
   )('sends %s the effort %s as reasoning_effort', async (model, effort) => {
@@ -140,6 +145,27 @@ describe('OllamaClient', () => {
       max_tokens: effort === 'none' ? MAX_OUTPUT_TOKENS : MAX_OUTPUT_TOKENS * 2,
     });
   });
+
+  it.each(['none', 'high'] as const)(
+    'sends a model that cannot think no reasoning_effort, even for %s',
+    async (effort) => {
+      let body: { reasoning_effort?: string; max_tokens?: number } = {};
+      const client = new OllamaClient(ollama, async (_input, init) => {
+        body = JSON.parse(String(init?.body));
+        return sseResponse(['ok']);
+      });
+      for await (const _ of client.streamChat(
+        'oreo-1.5b',
+        [{ role: 'user', content: 'hi' }],
+        new AbortController().signal,
+        effort,
+      )) {
+        // drain
+      }
+      expect(body).not.toHaveProperty('reasoning_effort');
+      expect(body.max_tokens).toBe(MAX_OUTPUT_TOKENS);
+    },
+  );
 });
 
 describe('tool calls', () => {

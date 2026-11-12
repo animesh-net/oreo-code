@@ -4,7 +4,7 @@ import { buildSystemPrompt } from './context';
 import { cloudModels } from '../cloudflare/client';
 import { describeCloudflareError } from '../cloudflare/errors';
 import { describeOllamaError, isUnreachable } from '../ollama/errors';
-import { OREO_MODELS } from '../ollama/models';
+import { inCatalogOrder, OREO_MODELS } from '../ollama/models';
 import { isLoopbackUrl, normalizeOllamaUrl } from '../ollama/url';
 import {
   DEFAULT_EFFORT,
@@ -192,7 +192,7 @@ export class ChatController {
     const mac = this.models.length
       ? this.models
       : OREO_MODELS.filter((m) => m.provider === 'macbook').map((m) => ({ ...m, available: false }));
-    this.models = [...mac, ...inCloud];
+    this.models = inCatalogOrder([...mac, ...inCloud]);
     // Picked again from the full list, so a remembered cloud model isn't lost to the Mac's.
     this.selectedModel = pickModel(this.models, prior, this.deps.getLastModel());
     if (this.selectedModel) this.error = undefined;
@@ -396,5 +396,8 @@ export function pickModel(
   const usable = models.filter((m) => m.available);
   if (current && usable.some((m) => m.id === current)) return current;
   if (preferred && usable.some((m) => m.id === preferred)) return preferred;
-  return usable[0]?.id;
+  // Otherwise the usable model ranked first; one without a rank is never picked for you.
+  return usable
+    .filter((m) => m.defaultRank !== undefined)
+    .sort((a, b) => (a.defaultRank ?? 0) - (b.defaultRank ?? 0))[0]?.id;
 }
