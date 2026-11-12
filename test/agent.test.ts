@@ -985,6 +985,19 @@ describe('claims changes it never made', () => {
     expect(claimsChanges("I've updated the handler to use async.")).toBe(true);
     expect(claimsChanges('The duplicate call has been removed.')).toBe(true);
     expect(claimsChanges('The bug is on line 6: the handler is inside the options object.')).toBe(false);
+    expect(claimsChanges('No changes made: the code is already correct.')).toBe(false);
+    expect(claimsChanges('Nothing has been changed yet.')).toBe(false);
+    expect(claimsChanges('No files changed.')).toBe(false);
+    expect(claimsChanges('In the last task I fixed the import.')).toBe(false);
+    expect(claimsChanges('No files changed. I fixed the import in a.js.')).toBe(true);
+  });
+
+  it("doesn't question a claim after a command ran, which may have changed files", async () => {
+    const ws = memoryWorkspace({});
+    const client = scripted([[call('run_command', { command: 'npm install' })], 'I updated your dependencies.']);
+    const result = await runAgent(deps(client, ws));
+    expect(client.calls).toHaveLength(2);
+    expect(result.reply).toBe('I updated your dependencies.');
   });
 
   it('tells the model no file was changed, and it makes the change', async () => {
@@ -998,15 +1011,15 @@ describe('claims changes it never made', () => {
     const result = await runAgent(deps(client, ws, { approveEdits: () => true }));
     expect(ws.files['server/index.js']).toBe('good');
     expect(client.calls[2].wire.at(-1)?.content).toMatch(/no file has been changed in this task/);
-    expect(result.reply).not.toMatch(/Note: no file was changed/);
+    expect(result.reply).not.toMatch(/Note: this task/);
   });
 
-  it('says plainly that nothing changed if the model keeps claiming it did', async () => {
+  it('asks once, then says plainly that nothing changed if the model keeps claiming it did', async () => {
     const ws = memoryWorkspace({ 'a.js': 'x' });
     const client = scripted(['Files changed: a.js — fixed.']);
     const result = await runAgent(deps(client, ws));
-    expect(client.calls).toHaveLength(1 + MAX_NUDGES);
-    expect(result.reply).toMatch(/Note: no file was changed in this task/);
+    expect(client.calls).toHaveLength(2);
+    expect(result.reply).toMatch(/Note: this task didn't change any file\.$/);
   });
 
   it('leaves a real report of changes alone', async () => {
