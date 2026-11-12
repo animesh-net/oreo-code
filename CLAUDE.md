@@ -189,7 +189,8 @@ commit, pull request) through the local `github-mcp-server` over stdio.
   command with hidden or control characters is refused. A rejection goes back to the model; Stop
   counts as one. `writePathProblem` refuses absolute paths, `.`/`..`, `.git` at any depth
   and secret files, in any letter case; the workspace refuses writes through symbolic
-  links or outside the folder's real path, checked before the card and again on write; an edit's `old_text` must match exactly once (in a
+  links or outside the folder's real path, checked before the card and again on write; an edit's `old_text` must match exactly once (read_file's `12: ` line numbers are
+  stripped if the model copied them; in a
   `\r\n` file, with its line endings), checked again when
   applied. Every file is remembered in the task's `Checkpoint` before it changes, so
   "Undo task" can restore it; undo leaves a file alone if it changed after the task

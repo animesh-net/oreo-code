@@ -97,7 +97,7 @@ export function describeProblems(path: string, before: readonly Problem[], after
   if (!added.length) {
     return after.length
       ? `No new errors in ${path} (${after.length} were there before this task).`
-      : `No errors in ${path}.`;
+      : `No errors reported for ${path}.`;
   }
   const shown = added.slice(0, MAX_PROBLEMS_SHOWN);
   return [

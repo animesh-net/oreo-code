@@ -24,7 +24,10 @@ export function detectCheckCommand(files: readonly string[], packageJson: string
     } catch {
       // Unreadable package.json: fall through to the other kinds.
     }
-    const script = NPM_SCRIPTS.find((s) => typeof scripts[s] === 'string');
+    // A script that watches or serves never ends, so it can't tell whether the code works.
+    const script = NPM_SCRIPTS.find(
+      (s) => typeof scripts[s] === 'string' && !/(--watch\b|\bwatch\b|\bserve\b|\bdev\b)/i.test(scripts[s] as string),
+    );
     if (script) {
       if (root.has('pnpm-lock.yaml')) return `pnpm run ${script}`;
       if (root.has('yarn.lock')) return `yarn ${script}`;

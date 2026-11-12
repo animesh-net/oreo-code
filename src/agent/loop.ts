@@ -103,6 +103,9 @@ export async function runAgent(deps: AgentDeps): Promise<AgentResult> {
   const baseline = new Map<string, Problem[]>();
   let verifyRounds = 0;
   let unresolved: string | undefined;
+  /** Files changed so far, and how many had changed at the last check. */
+  const progress = { changes: 0 };
+  let changesAtCheck = -1;
 
   for (let n = 1; n <= max;) {
     const offered = n < max ? tools : undefined;
@@ -150,6 +153,10 @@ export async function runAgent(deps: AgentDeps): Promise<AgentResult> {
       // Done, says the model. A task that changed files ends only with working code:
       // no new errors and a passing project check, or the failure goes back to fix.
       if (deps.checkpoint.isEmpty) break;
+      // The model answered a failed check without changing anything: it judged the
+      // failure not its own (e.g. already broken before the task). Report it and stop.
+      if (progress.changes === changesAtCheck) break;
+      changesAtCheck = progress.changes;
       const failure = await verifyWork(deps, baseline, step);
       if (!failure) {
         unresolved = undefined;
@@ -164,7 +171,7 @@ export async function runAgent(deps: AgentDeps): Promise<AgentResult> {
       deps.wire.push({ role: 'assistant', content: text });
       deps.wire.push({
         role: 'user',
-        content: `Not done yet: the code must work before the task ends.\n\n${failure}\n\nFix this, then say briefly what you changed.`,
+        content: `Not done yet: the code must work before the task ends.\n\n${failure}\n\nFix what your changes caused, then say briefly what you changed. If a failure was there before your changes and isn't caused by them, don't change unrelated code: say so and stop.`,
       });
       continue;
     }
@@ -192,7 +199,7 @@ export async function runAgent(deps: AgentDeps): Promise<AgentResult> {
       let result: string;
       try {
         result = isWriteTool(call.function.name)
-          ? await runWrite(deps, call, step, baseline)
+          ? await runWrite(deps, call, step, baseline, progress)
           : await runRead(deps, call, step);
       } catch (err) {
         if (deps.signal.aborted) throw err;
@@ -315,6 +322,7 @@ async function runWrite(
   call: ToolCall,
   step: (s: AgentStep) => void,
   baseline: Map<string, Problem[]>,
+  progress: { changes: number },
 ): Promise<string> {
   const prepared = await prepareWrite(deps.workspace, call);
   if ('error' in prepared) {
@@ -332,9 +340,10 @@ async function runWrite(
     }
   }
   const path = pending.kind === 'run_command' ? undefined : pending.path;
-  // Errors already in the file before the task touched it aren't the agent's to fix.
+  // Errors already in the file before the task touched it aren't the agent's to fix. A
+  // file nobody has opened has no errors listed yet, so let its language support look first.
   if (path && deps.problems && !baseline.has(path)) {
-    baseline.set(path, pending.kind === 'create_file' ? [] : await deps.problems(path, false));
+    baseline.set(path, pending.kind === 'create_file' ? [] : await deps.problems(path, true));
   }
   let result: string;
   try {
@@ -344,6 +353,7 @@ async function runWrite(
   }
   if (deps.signal.aborted) throw abortError();
   if (path && !result.startsWith('Error')) {
+    progress.changes++;
     if (deps.problems) {
       result += `\n${describeProblems(path, baseline.get(path) ?? [], await deps.problems(path, true))}`;
     }

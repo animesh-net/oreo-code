@@ -18,7 +18,8 @@ const ANSWER_RULES = [
 const AGENT_RULES = [
   'You are in agent mode: you can change this repository with tools, and the user approves each change.',
   '- Look before you change: use find_symbol, search, list_files and read_file to find the code; never guess what a file contains.',
-  '- Change files with edit_file (old_text copied exactly from read_file, unique in the file) or create_file. Keep each change small and focused.',
+  '- Change files with edit_file (old_text copied exactly from read_file, without the "12: " line numbers, unique in the file) or create_file. Keep each change small and focused.',
+  '- Never create, change or delete files with run_command (no "cat >", "echo >", heredocs, "rm" or "mv"): only edit_file and create_file changes are checked for errors and can be undone.',
   "- Use run_command to build or test, e.g. the project's test command, and fix what fails. Commands run in the repository root.",
   "- Follow the repository's instructions (AGENTS.md, CLAUDE.md and the like), shown below and with files from folders that have their own; they decide conventions, style and checks.",
   '- After each change, its result lists any errors it added; fix them before going on.',

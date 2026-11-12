@@ -302,11 +302,31 @@ function replaceOnce(
   newText: string,
   path: string,
 ): { text: string } | { error: string } {
+  // read_file shows "12: code"; small models copy the line numbers into old_text.
+  if (!text.includes(oldText) && hasLineNumbers(oldText)) {
+    oldText = stripLineNumbers(oldText);
+    if (hasLineNumbers(newText)) newText = stripLineNumbers(newText);
+  }
   if (text.includes('\r\n') && !text.includes(oldText) && !oldText.includes('\r')) {
     const crlf = (s: string) => s.replace(/\r?\n/g, '\r\n');
     return replaceExactlyOnce(text, crlf(oldText), crlf(newText), path);
   }
   return replaceExactlyOnce(text, oldText, newText, path);
+}
+
+const LINE_NUMBER = /^\s*\d+: ?/;
+
+/** True when every non-empty line starts like read_file's "12: ". */
+function hasLineNumbers(text: string): boolean {
+  const lines = text.split('\n').filter((l) => l.trim());
+  return lines.length > 0 && lines.every((l) => LINE_NUMBER.test(l));
+}
+
+function stripLineNumbers(text: string): string {
+  return text
+    .split('\n')
+    .map((l) => l.replace(LINE_NUMBER, ''))
+    .join('\n');
 }
 
 function replaceExactlyOnce(
@@ -317,7 +337,9 @@ function replaceExactlyOnce(
 ): { text: string } | { error: string } {
   const first = text.indexOf(oldText);
   if (first < 0) {
-    return { error: `Error: old_text was not found in ${path}. Read the file again and copy the text exactly.` };
+    return {
+      error: `Error: old_text was not found in ${path}. Copy it exactly from read_file, without the "12: " line numbers, with the same spaces and indentation, and include only a few whole lines.`,
+    };
   }
   let count = 0;
   for (let i = first; i >= 0; i = text.indexOf(oldText, i + 1)) count++;
