@@ -114,7 +114,7 @@ export interface ViewState {
   error?: string;
   /** Agent mode is on: the agent may edit files and run commands, with your approval. */
   agentMode: boolean;
-  /** "Approve edits for this task": edits and new files skip the card; commands still ask. */
+  /** "Apply edits without asking" (on by default, remembered): edits and new files skip the card; commands and files that run code still ask. */
   approveEdits: boolean;
   /** A folder is open, so agent mode has somewhere to work. */
   hasFolder: boolean;

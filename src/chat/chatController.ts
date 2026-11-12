@@ -1,3 +1,5 @@
+import { Instructions } from '../agent/instructions';
+import { detectCheckCommand } from '../agent/verify';
 import { Checkpoint } from '../agent/checkpoint';
 import { FIND_SYMBOL_TOOL, runFindSymbol } from '../agent/findSymbol';
 import { runAgent, type AgentModel } from '../agent/loop';
@@ -35,6 +37,9 @@ export interface ChatControllerDeps {
   getEffort(): ReasoningEffort | undefined;
   /** Remembers the thinking effort picked in the dropdown. */
   rememberEffort(effort: ReasoningEffort): void;
+  /** Agent mode and "Apply edits without asking" as you last set them; remembered across reloads. */
+  getAgentSettings?(): { agentMode?: boolean; approveEdits?: boolean };
+  rememberAgentSettings?(settings: { agentMode: boolean; approveEdits: boolean }): void;
   createClient(ollamaUrl: string): ModelClient;
   /**
    * Other addresses to try when nothing answers at a local URL (127.0.0.1 or
@@ -143,6 +148,22 @@ export function historyToWire(history: ChatMessage[]): WireMessage[] {
   }));
 }
 
+/** The share of a model's prompt the repository's instruction files may use, at most 24,000 characters. */
+export function instructionBudget(maxPromptChars = MAX_PROMPT_CHARS): number {
+  return Math.min(24_000, Math.floor(maxPromptChars * 0.15));
+}
+
+/** The project's check command, found from its files; undefined if there isn't one. */
+async function findCheckCommand(ws: WritableWorkspace): Promise<string | undefined> {
+  try {
+    const files = await ws.listFiles();
+    const packageJson = files.includes('package.json') ? await ws.readFile('package.json') : undefined;
+    return detectCheckCommand(files, packageJson);
+  } catch {
+    return undefined;
+  }
+}
+
 /** Tool rounds per reply; the last round gets no tools, so the model must answer. */
 export const MAX_TOOL_ROUNDS = 8;
 
@@ -158,8 +179,9 @@ export class ChatController {
   private error: string | undefined;
   private abort: AbortController | undefined;
   private refreshSeq = 0;
-  private agentMode = false;
-  private approveEdits = false;
+  private agentMode: boolean;
+  /** On unless you switch it off: edits apply without a card; commands and files that run code still ask. */
+  private approveEdits: boolean;
   private approval: { request: ApprovalRequest; answer(approved: boolean): void } | undefined;
   private approvalSeq = 0;
   /** Bumped by New chat, so a task stopped by it doesn't write into the new chat. */
@@ -167,7 +189,15 @@ export class ChatController {
   /** What the last agent task changed, for "Undo task". */
   private checkpoint: Checkpoint | undefined;
 
-  constructor(private readonly deps: ChatControllerDeps) {}
+  constructor(private readonly deps: ChatControllerDeps) {
+    const saved = deps.getAgentSettings?.() ?? {};
+    this.agentMode = saved.agentMode ?? false;
+    this.approveEdits = saved.approveEdits ?? true;
+  }
+
+  private rememberAgentSettings(): void {
+    this.deps.rememberAgentSettings?.({ agentMode: this.agentMode, approveEdits: this.approveEdits });
+  }
 
   /** Re-reads the Ollama URL setting, then reloads the model list. */
   async refresh(): Promise<void> {
@@ -301,11 +331,13 @@ export class ChatController {
       case 'setAgentMode':
         if (!this.busy) {
           this.agentMode = message.on;
+          this.rememberAgentSettings();
           this.publish();
         }
         return;
       case 'setApproveEdits':
         this.approveEdits = message.on;
+        this.rememberAgentSettings();
         this.publish();
         return;
       case 'approval':
@@ -470,8 +502,6 @@ export class ChatController {
       }
     } finally {
       this.busy = false;
-      // "Approve edits for this task" covers one task only.
-      this.approveEdits = false;
       if (this.abort === abort) this.abort = undefined;
       this.publish();
     }
@@ -493,8 +523,11 @@ export class ChatController {
       this.checkpoint = checkpoint;
     });
     const findSymbol = this.deps.findSymbol;
+    // The repository's instruction files and its check run on their own, nothing to set up.
+    const instructions = new Instructions(ws, instructionBudget(model.info.maxPromptChars));
+    const [rootInstructions, checkCommand] = await Promise.all([instructions.root(), findCheckCommand(ws)]);
     const wire: WireMessage[] = [
-      { role: 'system', content: await buildSystemPrompt(ws, true, true) },
+      { role: 'system', content: await buildSystemPrompt(ws, true, true, rootInstructions) },
       ...historyToWire(history),
     ];
     return runAgent({
@@ -519,6 +552,9 @@ export class ChatController {
       onThinking: () => this.deps.post({ type: 'thinking' }),
       onStep: on.onStep,
       onMove: on.onMove,
+      instructionsFor: (path) => instructions.forPath(path),
+      problems: ws.problems?.bind(ws),
+      checkCommand,
     });
   }
 

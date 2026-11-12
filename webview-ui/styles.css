@@ -335,12 +335,9 @@ textarea:focus {
   color: var(--vscode-button-foreground);
   background: var(--vscode-button-background);
 }
-.approve-edits {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 0.9em;
-  margin: 4px 0;
+.pill.small {
+  font-size: 0.85em;
+  padding-inline: 6px;
 }
 .steps {
   margin: 4px 0;

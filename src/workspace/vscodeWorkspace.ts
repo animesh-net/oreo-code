@@ -3,6 +3,7 @@ import { lstat, realpath } from 'node:fs/promises';
 import * as nodePath from 'node:path';
 import * as vscode from 'vscode';
 import type { ActiveFile } from '../agent/workspaceTools';
+import type { Problem } from '../agent/instructions';
 import { COMMAND_TIMEOUT_MS, commandEnv, type CommandResult, type WritableWorkspace } from '../agent/writeTools';
 
 /** Folders never listed or read: dependencies, git internals and build output. */
@@ -14,6 +15,10 @@ const LIST_TTL_MS = 30_000;
 
 /** Output kept from a command, half from its start and half from its end; the model gets less (src/agent/writeTools.ts). */
 const MAX_COMMAND_CAPTURE = 200_000;
+/** The longest wait for language support to re-check a changed file. */
+const PROBLEMS_WAIT_MS = 2_500;
+/** Quiet time after the last diagnostics update before reading them. */
+const PROBLEMS_SETTLE_MS = 400;
 /** How long output may still arrive after the shell exits. */
 const EXIT_DRAIN_MS = 1_000;
 /** How long a stopped command gets to exit before it is killed outright. */
@@ -38,6 +43,37 @@ class FolderWorkspace implements WritableWorkspace {
 
   private uri(path: string): vscode.Uri {
     return vscode.Uri.joinPath(this.folder.uri, ...path.split('/'));
+  }
+
+  async problems(path: string, wait: boolean): Promise<Problem[]> {
+    const uri = this.uri(path);
+    if (wait) {
+      try {
+        // Open (not show) the file, so its language support checks it.
+        await vscode.workspace.openTextDocument(uri);
+      } catch {
+        return [];
+      }
+      await new Promise<void>((resolve) => {
+        let settle: NodeJS.Timeout | undefined;
+        const done = () => {
+          sub.dispose();
+          clearTimeout(limit);
+          if (settle) clearTimeout(settle);
+          resolve();
+        };
+        const sub = vscode.languages.onDidChangeDiagnostics((e) => {
+          if (!e.uris.some((u) => u.toString() === uri.toString())) return;
+          if (settle) clearTimeout(settle);
+          settle = setTimeout(done, PROBLEMS_SETTLE_MS);
+        });
+        const limit = setTimeout(done, PROBLEMS_WAIT_MS);
+      });
+    }
+    return vscode.languages
+      .getDiagnostics(uri)
+      .filter((d) => d.severity === vscode.DiagnosticSeverity.Error)
+      .map((d) => ({ line: d.range.start.line + 1, message: d.message, source: d.source }));
   }
 
   unsavedFiles(): string[] {

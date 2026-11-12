@@ -127,6 +127,8 @@ commit, pull request) through the local `github-mcp-server` over stdio.
 | `src/agent/loop.ts`                 | Agent mode's loop: model calls, tool calls, approvals, step limit, move to the Mac on a limit                              |
 | `src/agent/writeTools.ts`           | Agent write tools (edit_file, create_file, run_command): path rules, diffs, applying                                       |
 | `src/agent/checkpoint.ts`           | "Undo task": each changed file's text from before the task, in memory                                                      |
+| `src/agent/instructions.ts`         | The repository's instruction files for the agent, and the errors a change added                                            |
+| `src/agent/verify.ts`               | The project check found from its files, run when the agent says it's done                                                  |
 | `src/agent/findSymbol.ts`           | Read-only `find_symbol` over the completion symbol index                                                                   |
 | `src/agent/workspaceTools.ts`       | Read-only workspace tools (list, read, search); secret files refused                                                       |
 | `src/completion/`                   | Inline completion: repo snippets, symbol index, FIM prompt, budget, trimming; no `vscode`                                  |
@@ -178,15 +180,17 @@ commit, pull request) through the local `github-mcp-server` over stdio.
   through the prompt.
 - **Agent mode writes only with approval.** `runAgent` (`src/agent/loop.ts`) sends
   every write tool through `needsApproval` (`src/agent/policy.ts`): `run_command`
-  always asks; `edit_file` and `create_file` ask unless "Approve edits for this task"
-  is on, which resets when the task ends and never covers a file that decides what
+  always asks; `edit_file` and `create_file` ask unless Auto-edit ("Apply edits without asking")
+  is on (the default; it and the Agent switch are remembered across reloads in
+  `globalState`), which never covers a file that decides what
   runs (`runsCode`: scripts, hooks, build, CI, package lists and settings,
   code-based tool configs and editor task files). The card shows
   the whole change, never a cut one (`MAX_WRITE_CHARS` caps file size instead), and a
   command with hidden or control characters is refused. A rejection goes back to the model; Stop
   counts as one. `writePathProblem` refuses absolute paths, `.`/`..`, `.git` at any depth
   and secret files, in any letter case; the workspace refuses writes through symbolic
-  links or outside the folder's real path, checked before the card and again on write; an edit's `old_text` must match exactly once (in a
+  links or outside the folder's real path, checked before the card and again on write; an edit's `old_text` must match exactly once (read_file's `12: ` line numbers are
+  stripped if the model copied them; in a
   `\r\n` file, with its line endings), checked again when
   applied. Every file is remembered in the task's `Checkpoint` before it changes, so
   "Undo task" can restore it; undo leaves a file alone if it changed after the task
@@ -194,7 +198,18 @@ commit, pull request) through the local `github-mcp-server` over stdio.
   Commands run with `commandEnv`: your environment without VS Code's `ELECTRON_RUN_AS_NODE` and `VSCODE_*`. `fitToContext`
   counts tool-call arguments and trims those of calls already made. A tool that fails goes back to the model as an error; the task goes on. Calls get unique ids, unparseable
   arguments are replaced with `{}` in the conversation, and the last round (no tools offered) runs no calls.
-  `MAX_AGENT_STEPS` is the only step limit. Agent mode is
+  `MAX_AGENT_STEPS` is the only step limit.
+- **Agent mode ends with working code, on its own.** The root `AGENTS.md`, `CLAUDE.md`
+  and `.github/copilot-instructions.md` go in the agent's system prompt, and a folder's
+  own `AGENTS.md`/`CLAUDE.md` with the first file read or changed there (`Instructions`,
+  within `instructionBudget`). After each edit the result lists the VS Code errors it
+  added (`describeProblems`, against the file's errors before the task). When the model
+  says it's done and the task changed files, the changed files are checked again and the
+  project check from `detectCheckCommand` runs; failures go back to the model up to
+  `MAX_VERIFY_ROUNDS` times, then the reply says they still fail. None of it needs a
+  setting; the project check runs code the agent may have changed, so it asks once per
+  task before its first run (rejecting skips it for that task), then runs on its own.
+  The check command is never read from settings a repository could set. Agent mode is
   offered only for models with `supportsTools: true`; `find_symbol` reads the one
   symbol index completion keeps, never a second one.
 - **Workspace tools only read.** `src/agent/workspaceTools.ts` reads only files in the

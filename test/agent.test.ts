@@ -1,6 +1,8 @@
 import { APIError } from 'openai';
 import { describe, expect, it } from 'vitest';
 import { Checkpoint } from '../src/agent/checkpoint';
+import { describeProblems, Instructions, newProblems, type Problem } from '../src/agent/instructions';
+import { detectCheckCommand } from '../src/agent/verify';
 import { FIND_SYMBOL_TOOL, runFindSymbol } from '../src/agent/findSymbol';
 import { MALFORMED_TWICE, MAX_AGENT_STEPS, malformedProblem, runAgent, type AgentDeps } from '../src/agent/loop';
 import { needsApproval } from '../src/agent/policy';
@@ -647,6 +649,7 @@ describe('agent mode in the chat', () => {
       'Changed a.ts.',
     ]);
     await controller.handle({ type: 'setAgentMode', on: true });
+    await controller.handle({ type: 'setApproveEdits', on: false });
     const task = controller.handle({ type: 'send', text: 'change x' });
     for (let i = 0; i < 20 && !controller.state.approval; i++) await tick();
     const approval = controller.state.approval;
@@ -701,8 +704,43 @@ describe('agent mode in the chat', () => {
     expect(ws.commands).toEqual([]);
     expect(controller.state.approval).toBeUndefined();
     expect(controller.state.busy).toBe(false);
-    // "Approve edits for this task" ends with the task.
-    expect(controller.state.approveEdits).toBe(false);
+    // Your settings stay as you set them.
+    expect(controller.state).toMatchObject({ agentMode: true, approveEdits: true });
+  });
+
+  it('applies edits without asking by default, and remembers the Agent switch and the box', async () => {
+    const saved: { agentMode: boolean; approveEdits: boolean }[] = [];
+    const { ws, controller } = await setup([
+      [call('edit_file', { path: 'a.ts', old_text: 'x', new_text: 'y' })],
+      'Changed.',
+    ]);
+    (
+      controller as unknown as { deps: { rememberAgentSettings: (s: (typeof saved)[0]) => void } }
+    ).deps.rememberAgentSettings = (s) => saved.push(s);
+    expect(controller.state).toMatchObject({ agentMode: false, approveEdits: true });
+    await controller.handle({ type: 'setAgentMode', on: true });
+    await controller.handle({ type: 'send', text: 'change x' });
+    expect(ws.files['a.ts']).toBe('y'); // no card
+    expect(controller.state.agentMode).toBe(true); // still on after the reply
+    await controller.handle({ type: 'setApproveEdits', on: false });
+    expect(saved).toEqual([
+      { agentMode: true, approveEdits: true },
+      { agentMode: true, approveEdits: false },
+    ]);
+  });
+
+  it('starts with the agent settings you saved last time', () => {
+    const controller = new ChatController({
+      getOllamaUrl: () => '',
+      getLastModel: () => undefined,
+      rememberModel: () => {},
+      getEffort: () => undefined,
+      rememberEffort: () => {},
+      createClient: () => scripted([]),
+      post: () => {},
+      getAgentSettings: () => ({ agentMode: true, approveEdits: false }),
+    });
+    expect(controller.state).toMatchObject({ agentMode: true, approveEdits: false });
   });
 
   it('keeps chatting normally with a model that has no tools, even in agent mode', async () => {
@@ -712,5 +750,188 @@ describe('agent mode in the chat', () => {
     await controller.handle({ type: 'send', text: 'hi' });
     expect(client.calls[0].tools).toBeUndefined();
     expect(controller.state.messages.at(-1)?.content).toBe('Plain answer.');
+  });
+});
+
+describe('repository instructions and checks', () => {
+  it('reads the root instruction files once, and a folder’s own the first time the agent works there', async () => {
+    const ws = memoryWorkspace({
+      'AGENTS.md': 'Use tabs.',
+      'CLAUDE.md': 'Run npm run check.',
+      'src/web/AGENTS.md': 'No jQuery.',
+      'src/web/app.ts': 'x',
+      '.env': 'SECRET=1',
+    });
+    const ins = new Instructions(ws, 10_000);
+    expect(await ins.root()).toBe('--- AGENTS.md ---\nUse tabs.\n\n--- CLAUDE.md ---\nRun npm run check.');
+    expect(await ins.forPath('src/web/app.ts')).toBe('--- src/web/AGENTS.md ---\nNo jQuery.');
+    expect(await ins.forPath('src/web/other.ts')).toBe('');
+    expect(await ins.root()).toBe('');
+  });
+
+  it('keeps instruction files within the budget', async () => {
+    const ws = memoryWorkspace({ 'AGENTS.md': 'a'.repeat(5_000), 'CLAUDE.md': 'b'.repeat(5_000) });
+    const text = await new Instructions(ws, 6_000).root();
+    expect(text.length).toBeLessThan(6_200);
+    expect(text).toMatch(/rest of CLAUDE\.md cut/);
+  });
+
+  it('reports only the errors a change added', () => {
+    const before = [{ line: 3, message: 'old problem' }];
+    const after = [
+      { line: 9, message: 'old problem' },
+      { line: 4, message: "';' expected.", source: 'ts' },
+    ];
+    expect(newProblems(before, after)).toEqual([{ line: 4, message: "';' expected.", source: 'ts' }]);
+    expect(describeProblems('a.ts', before, after)).toBe(
+      "Errors in a.ts after this change. Fix them before going on:\n- line 4: ';' expected. (ts)",
+    );
+    expect(describeProblems('a.ts', before, [{ line: 1, message: 'old problem' }])).toMatch(/No new errors/);
+    expect(describeProblems('a.ts', [], [])).toBe('No errors reported for a.ts.');
+  });
+
+  it('finds the project check from its files', () => {
+    const pkg = (scripts: object) => JSON.stringify({ scripts });
+    expect(detectCheckCommand(['package.json'], pkg({ test: 'vitest', check: 'tsc' }))).toBe('npm run check');
+    expect(detectCheckCommand(['package.json', 'pnpm-lock.yaml'], pkg({ test: 'x' }))).toBe('pnpm run test');
+    expect(detectCheckCommand(['package.json', 'yarn.lock'], pkg({ build: 'x' }))).toBe('yarn build');
+    expect(detectCheckCommand(['App.sln', 'src/App/App.csproj'], undefined)).toBe('dotnet build');
+    expect(detectCheckCommand(['Cargo.toml'], undefined)).toBe('cargo check');
+    expect(detectCheckCommand(['go.mod'], undefined)).toBe('go build ./...');
+    expect(detectCheckCommand(['README.md'], undefined)).toBeUndefined();
+    expect(detectCheckCommand(['package.json'], pkg({ start: 'node .' }))).toBeUndefined();
+  });
+
+  it('shows a change the errors it added, so the model fixes them', async () => {
+    const ws = memoryWorkspace({ 'a.ts': 'let x = 1;' });
+    const errors: Record<string, Problem[]> = { 'a.ts': [] };
+    const client = scripted([
+      [call('edit_file', { path: 'a.ts', old_text: '1;', new_text: '1' })],
+      [call('edit_file', { path: 'a.ts', old_text: '= 1', new_text: '= 1;' }, 'c2')],
+      'Fixed.',
+    ]);
+    ws.writeFile = async (p, text) => {
+      ws.files[p] = text;
+      errors[p] = text.endsWith(';') ? [] : [{ line: 1, message: "';' expected." }];
+    };
+    const d = deps(client, ws, { approveEdits: () => true, problems: async (p) => errors[p] ?? [] });
+    const result = await runAgent(d);
+    const first = client.calls[1].wire.filter((m) => m.role === 'tool').at(-1)?.content;
+    expect(first).toMatch(/Errors in a\.ts after this change[\s\S]*line 1: ';' expected\./);
+    expect(result.reply).toBe('Fixed.');
+    expect(d.steps.some((s) => /no new errors/.test(s.title))).toBe(true);
+  });
+
+  it("doesn't let the task end while the project check fails, and says so if it never passes", async () => {
+    const ws = memoryWorkspace({ 'a.ts': 'v0' });
+    let passes = false;
+    ws.runCommand = async (command) => {
+      ws.commands.push(command);
+      return { exitCode: passes ? 0 : 1, output: passes ? 'ok' : 'FAIL a.test.ts', timedOut: false };
+    };
+    const edit = (from: string, to: string, id: string) => [
+      call('edit_file', { path: 'a.ts', old_text: from, new_text: to }, id),
+    ];
+    const client = scripted([
+      edit('v0', 'v1', 'c1'),
+      'Done.',
+      edit('v1', 'v2', 'c2'),
+      'Done again.',
+      edit('v2', 'v3', 'c3'),
+      'Done again.',
+      edit('v3', 'v4', 'c4'),
+      'Done!',
+    ]);
+    const d = deps(client, ws, { approveEdits: () => true, checkCommand: 'npm test' });
+    const result = await runAgent(d);
+    expect(ws.commands).toEqual(['npm test', 'npm test', 'npm test', 'npm test']);
+    // Asked once, before the first run; the later runs go on their own.
+    expect(d.approvals).toEqual([{ kind: 'run_command', command: 'npm test' }]);
+    expect(client.calls[2].wire.at(-1)?.content).toMatch(/Not done yet[\s\S]*FAIL a\.test\.ts/);
+    expect(result.reply).toMatch(/The checks still fail, so this isn't working yet/);
+
+    passes = true;
+    ws.commands.length = 0;
+    const again = scripted([edit('v4', 'v5', 'c1'), 'Done.']);
+    const ok = await runAgent(deps(again, ws, { approveEdits: () => true, checkCommand: 'npm test' }));
+    expect(ws.commands).toEqual(['npm test']);
+    expect(ok.reply).toBe('Done.');
+  });
+
+  it('skips the project check for the task when you reject it, but still checks for errors', async () => {
+    const ws = memoryWorkspace({ 'a.ts': 'x' });
+    const client = scripted([[call('edit_file', { path: 'a.ts', old_text: 'x', new_text: 'y' })], 'Done.']);
+    const d = deps(client, ws, {
+      approveEdits: () => true,
+      checkCommand: 'npm test',
+      problems: async () => [],
+      requestApproval: async () => false,
+    });
+    const result = await runAgent(d);
+    expect(ws.commands).toEqual([]);
+    expect(result.reply).toBe('Done.');
+    expect(d.steps.map((s) => s.title)).toEqual(
+      expect.arrayContaining([
+        'Checked 1 changed file: no new errors',
+        'Skipped the project check `npm test` (rejected)',
+      ]),
+    );
+  });
+
+  it('stops checking when the model answers a failure without changing anything', async () => {
+    const ws = memoryWorkspace({ 'a.ts': 'x' });
+    ws.runCommand = async (command) => {
+      ws.commands.push(command);
+      return { exitCode: 1, output: 'already broken on main', timedOut: false };
+    };
+    const client = scripted([
+      [call('edit_file', { path: 'a.ts', old_text: 'x', new_text: 'y' })],
+      'Done.',
+      'That failure was there before my change.',
+    ]);
+    const result = await runAgent(deps(client, ws, { approveEdits: () => true, checkCommand: 'npm test' }));
+    expect(ws.commands).toEqual(['npm test']);
+    expect(client.calls).toHaveLength(3);
+    expect(result.reply).toMatch(/there before my change[\s\S]*The checks still fail/);
+  });
+
+  it('accepts old_text copied with read_file line numbers', async () => {
+    const ws = memoryWorkspace({ 'server/start.js': 'const a = 1;\nconst b = 2;\n' });
+    const prepared = await prepareWrite(
+      ws,
+      call('edit_file', {
+        path: 'server/start.js',
+        old_text: '1: const a = 1;\n2: const b = 2;',
+        new_text: '1: const a = 1;\n2: const b = 3;',
+      }),
+    );
+    if (!('pending' in prepared)) throw new Error(`expected pending: ${JSON.stringify(prepared)}`);
+    await applyWrite(ws, prepared.pending, new AbortController().signal, () => {});
+    expect(ws.files['server/start.js']).toBe('const a = 1;\nconst b = 3;\n');
+    const missing = await prepareWrite(
+      ws,
+      call('edit_file', { path: 'server/start.js', old_text: 'nope', new_text: 'x' }),
+    );
+    expect('error' in missing && missing.error).toMatch(/without the "12: " line numbers/);
+  });
+
+  it('skips npm scripts that watch or serve, which never end', () => {
+    const pkg = JSON.stringify({ scripts: { check: 'tsc --watch', test: 'vitest run' } });
+    expect(detectCheckCommand(['package.json'], pkg)).toBe('npm run test');
+  });
+
+  it('skips the checks when the task changed nothing', async () => {
+    const ws = memoryWorkspace({ 'a.ts': 'x' });
+    const client = scripted([[call('list_files', {})], 'Nothing to change.']);
+    await runAgent(deps(client, ws, { checkCommand: 'npm test' }));
+    expect(ws.commands).toEqual([]);
+  });
+
+  it('adds a folder’s instructions to the first file read there', async () => {
+    const ws = memoryWorkspace({ 'src/AGENTS.md': 'Prefer async.', 'src/a.ts': 'x' });
+    const ins = new Instructions(ws, 10_000);
+    const client = scripted([[call('read_file', { path: 'src/a.ts' })], 'Read it.']);
+    await runAgent(deps(client, ws, { instructionsFor: (p) => ins.forPath(p) }));
+    expect(client.calls[1].wire.at(-1)?.content).toMatch(/follow them:\n--- src\/AGENTS\.md ---\nPrefer async\./);
   });
 });
