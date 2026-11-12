@@ -205,7 +205,9 @@ commit, pull request) through the local `github-mcp-server` over stdio.
   is told to do it, up to `MAX_NUDGES` times; a reply that claims changes (`claimsChanges`:
   not negated, not about an earlier task) when the task changed no file and ran no
   command is questioned once, and if it still makes none the reply ends with a note that
-  the task didn't change any file. `MAX_AGENT_STEPS` is the only step limit.
+  the task didn't change any file. `MAX_AGENT_STEPS` is the only step limit; ending at it
+  mid-way adds a note saying so. `run_command` refuses commands that only read or list
+  files (`READS_FILES`), pointing to read_file, list_files and search.
 - **Agent mode ends with working code, on its own.** The root `AGENTS.md`, `CLAUDE.md`
   and `.github/copilot-instructions.md` go in the agent's system prompt, and a folder's
   own `AGENTS.md`/`CLAUDE.md` with the first file read or changed there (`Instructions`,
