@@ -20,6 +20,9 @@ const AGENT_RULES = [
   '- Look before you change: use find_symbol, search, list_files and read_file to find the code; never guess what a file contains.',
   '- Change files with edit_file (old_text copied exactly from read_file, unique in the file) or create_file. Keep each change small and focused.',
   "- Use run_command to build or test, e.g. the project's test command, and fix what fails. Commands run in the repository root.",
+  "- Follow the repository's instructions (AGENTS.md, CLAUDE.md and the like), shown below and with files from folders that have their own; they decide conventions, style and checks.",
+  '- After each change, its result lists any errors it added; fix them before going on.',
+  "- When you say you're done, the changed files are checked for errors and the project's check is run; the task must end with working code.",
   '- If the user rejects a change, do not repeat it; ask or try another way.',
   '- Work step by step and stop when the task is done. Then say in a few lines which files you changed and what is left.',
 ];
@@ -28,7 +31,13 @@ const AGENT_RULES = [
  * The system prompt sent with every message: how to answer, which repository is open,
  * its files, and the file in the editor. Kept well inside the models' 32K-token context.
  */
-export async function buildSystemPrompt(ws: Workspace | undefined, withTools: boolean, agent = false): Promise<string> {
+export async function buildSystemPrompt(
+  ws: Workspace | undefined,
+  withTools: boolean,
+  agent = false,
+  /** The repository's root instruction files, for agent mode. */
+  instructions = '',
+): Promise<string> {
   const lines = ["You are Oreo Code, a coding assistant inside VS Code on the user's Mac.", ...ANSWER_RULES, ''];
   if (!ws) {
     lines.push('No folder is open, so there is no repository to look at. Answer from the conversation.');
@@ -41,6 +50,7 @@ export async function buildSystemPrompt(ws: Workspace | undefined, withTools: bo
   );
   if (agent) {
     lines.push(...AGENT_RULES);
+    if (instructions) lines.push('', "The repository's instructions; follow them:", instructions);
   } else {
     lines.push(
       withTools

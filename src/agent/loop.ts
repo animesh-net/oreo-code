@@ -1,8 +1,20 @@
 import type { FunctionTool, ModelClient, ToolCall, WireMessage } from '../ollama/client';
 import type { AgentStep, ModelInfo, ReasoningEffort } from '../shared/protocol';
 import type { Checkpoint } from './checkpoint';
+import { describeProblems, newProblems, type Problem } from './instructions';
 import { needsApproval } from './policy';
-import { applyWrite, describeWrite, isWriteTool, prepareWrite, WRITE_TOOLS, type PendingWrite } from './writeTools';
+import { MAX_VERIFY_ROUNDS } from './verify';
+import {
+  applyWrite,
+  COMMAND_TIMEOUT_MS,
+  describeWrite,
+  isWriteTool,
+  keepEnds,
+  MAX_COMMAND_OUTPUT_CHARS,
+  prepareWrite,
+  WRITE_TOOLS,
+  type PendingWrite,
+} from './writeTools';
 import type { ToolResult } from './workspaceTools';
 import type { WritableWorkspace } from './writeTools';
 
@@ -51,6 +63,12 @@ export interface AgentDeps {
   onStep(step: AgentStep): void;
   /** Called when the task moves to the fallback model, so errors after it are worded for that model. */
   onMove?(model: ModelInfo): void;
+  /** A folder's own instruction files (AGENTS.md, CLAUDE.md) not given yet, for a path the agent works on. */
+  instructionsFor?(path: string): Promise<string>;
+  /** Errors VS Code's language support reports in a file; `wait` lets it re-check after a change first. */
+  problems?(path: string, wait: boolean): Promise<Problem[]>;
+  /** The project's check (build, typecheck or tests), run when the agent says it's done. */
+  checkCommand?: string;
   maxSteps?: number;
 }
 
@@ -81,6 +99,10 @@ export async function runAgent(deps: AgentDeps): Promise<AgentResult> {
   let question = deps.question;
   let reply = '';
   let malformedRounds = 0;
+  /** Each changed file's errors before the task touched it. */
+  const baseline = new Map<string, Problem[]>();
+  let verifyRounds = 0;
+  let unresolved: string | undefined;
 
   for (let n = 1; n <= max;) {
     const offered = n < max ? tools : undefined;
@@ -124,7 +146,28 @@ export async function runAgent(deps: AgentDeps): Promise<AgentResult> {
     n++;
     // The last round offers no tools; a call the model makes anyway isn't run.
     if (!offered) calls = undefined;
-    if (!calls?.length) break;
+    if (!calls?.length) {
+      // Done, says the model. A task that changed files ends only with working code:
+      // no new errors and a passing project check, or the failure goes back to fix.
+      if (deps.checkpoint.isEmpty) break;
+      const failure = await verifyWork(deps, baseline, step);
+      if (!failure) {
+        unresolved = undefined;
+        break;
+      }
+      if (verifyRounds >= MAX_VERIFY_ROUNDS || n > max) {
+        unresolved = failure;
+        break;
+      }
+      verifyRounds++;
+      unresolved = failure;
+      deps.wire.push({ role: 'assistant', content: text });
+      deps.wire.push({
+        role: 'user',
+        content: `Not done yet: the code must work before the task ends.\n\n${failure}\n\nFix this, then say briefly what you changed.`,
+      });
+      continue;
+    }
 
     // Every call needs a unique id for its result to point at; some models leave it out.
     const seen = new Set<string>();
@@ -148,7 +191,9 @@ export async function runAgent(deps: AgentDeps): Promise<AgentResult> {
       }
       let result: string;
       try {
-        result = isWriteTool(call.function.name) ? await runWrite(deps, call, step) : await runRead(deps, call, step);
+        result = isWriteTool(call.function.name)
+          ? await runWrite(deps, call, step, baseline)
+          : await runRead(deps, call, step);
       } catch (err) {
         if (deps.signal.aborted) throw err;
         // A tool that fails tells the model, which can try another way; the task goes on.
@@ -180,6 +225,11 @@ export async function runAgent(deps: AgentDeps): Promise<AgentResult> {
       if (deps.signal.aborted) throw err;
     }
   }
+  if (unresolved) {
+    const note = `\n\nThe checks still fail, so this isn't working yet:\n\n${unresolved}`;
+    reply += note;
+    deps.onText(note);
+  }
   if (!reply.trim()) {
     reply = steps.length
       ? `Finished after ${steps.length} tool call${steps.length === 1 ? '' : 's'}.`
@@ -196,10 +246,76 @@ async function runRead(deps: AgentDeps, call: ToolCall, step: (s: AgentStep) => 
     detail: detail(call, result.content),
     outcome: result.content.startsWith('Error') ? 'error' : 'ok',
   });
-  return result.content;
+  const path = call.function.name === 'read_file' ? pathOf(call) : undefined;
+  return path && !result.content.startsWith('Error') ? withInstructions(deps, path, result.content) : result.content;
 }
 
-async function runWrite(deps: AgentDeps, call: ToolCall, step: (s: AgentStep) => void): Promise<string> {
+/** Adds the instructions of the folders above `path` that the model hasn't had yet. */
+async function withInstructions(deps: AgentDeps, path: string, result: string): Promise<string> {
+  const extra = (await deps.instructionsFor?.(path)) ?? '';
+  return extra ? `${result}\n\nInstructions for this part of the repository; follow them:\n${extra}` : result;
+}
+
+function pathOf(call: ToolCall): string | undefined {
+  try {
+    const path = (JSON.parse(call.function.arguments || '{}') as { path?: unknown }).path;
+    return typeof path === 'string' ? path.trim().replace(/^\.\//, '') : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * When the agent says it's done: the errors its changes added, then the project's
+ * check. Returns what failed, for the model to fix, or undefined if all is well.
+ */
+async function verifyWork(
+  deps: AgentDeps,
+  baseline: ReadonlyMap<string, Problem[]>,
+  step: (s: AgentStep) => void,
+): Promise<string | undefined> {
+  const failures: string[] = [];
+  if (deps.problems) {
+    let count = 0;
+    for (const [path, before] of baseline) {
+      const after = await deps.problems(path, false);
+      const added = newProblems(before, after);
+      if (added.length) {
+        count += added.length;
+        failures.push(describeProblems(path, before, after));
+      }
+    }
+    step({
+      title: `Checked ${baseline.size} changed file${baseline.size === 1 ? '' : 's'}: ${count ? `${count} new error${count === 1 ? '' : 's'}` : 'no new errors'}`,
+      outcome: count ? 'error' : 'ok',
+    });
+  }
+  if (deps.checkCommand) {
+    const result = await deps.workspace.runCommand(deps.checkCommand, deps.signal);
+    if (deps.signal.aborted) throw abortError();
+    const passed = !result.timedOut && result.exitCode === 0;
+    const status = result.timedOut
+      ? `stopped after ${COMMAND_TIMEOUT_MS / 1000} seconds`
+      : result.exitCode === undefined
+        ? 'stopped'
+        : `exit code ${result.exitCode}`;
+    const output = keepEnds(result.output.trim(), MAX_COMMAND_OUTPUT_CHARS) || '(no output)';
+    step({
+      title: `Ran the project check \`${deps.checkCommand}\`: ${passed ? 'passed' : 'failed'}`,
+      detail: clip(output),
+      outcome: passed ? 'ok' : 'error',
+    });
+    if (!passed) failures.push(`The project check \`${deps.checkCommand}\` failed (${status}):\n${output}`);
+  }
+  return failures.length ? failures.join('\n\n') : undefined;
+}
+
+async function runWrite(
+  deps: AgentDeps,
+  call: ToolCall,
+  step: (s: AgentStep) => void,
+  baseline: Map<string, Problem[]>,
+): Promise<string> {
   const prepared = await prepareWrite(deps.workspace, call);
   if ('error' in prepared) {
     step({ title: `Couldn't ${call.function.name.replace('_', ' ')}`, detail: prepared.error, outcome: 'error' });
@@ -215,6 +331,11 @@ async function runWrite(deps: AgentDeps, call: ToolCall, step: (s: AgentStep) =>
       return REJECTED;
     }
   }
+  const path = pending.kind === 'run_command' ? undefined : pending.path;
+  // Errors already in the file before the task touched it aren't the agent's to fix.
+  if (path && deps.problems && !baseline.has(path)) {
+    baseline.set(path, pending.kind === 'create_file' ? [] : await deps.problems(path, false));
+  }
   let result: string;
   try {
     result = await applyWrite(deps.workspace, pending, deps.signal, (e) => deps.checkpoint.remember(e));
@@ -222,6 +343,12 @@ async function runWrite(deps: AgentDeps, call: ToolCall, step: (s: AgentStep) =>
     result = `Error: ${(err as Error).message}`;
   }
   if (deps.signal.aborted) throw abortError();
+  if (path && !result.startsWith('Error')) {
+    if (deps.problems) {
+      result += `\n${describeProblems(path, baseline.get(path) ?? [], await deps.problems(path, true))}`;
+    }
+    result = await withInstructions(deps, path, result);
+  }
   const shown = pending.kind === 'run_command' ? result : 'diff' in pending ? `${pending.diff}\n\n${result}` : result;
   step({ title, detail: clip(shown), outcome: result.startsWith('Error') ? 'error' : 'ok' });
   return result;

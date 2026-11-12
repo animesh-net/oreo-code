@@ -1,3 +1,5 @@
+import { Instructions } from '../agent/instructions';
+import { detectCheckCommand } from '../agent/verify';
 import { Checkpoint } from '../agent/checkpoint';
 import { FIND_SYMBOL_TOOL, runFindSymbol } from '../agent/findSymbol';
 import { runAgent, type AgentModel } from '../agent/loop';
@@ -144,6 +146,22 @@ export function historyToWire(history: ChatMessage[]): WireMessage[] {
         ? `${m.content.slice(0, MAX_EARLIER_REPLY_CHARS)}${SHORTENED}`
         : m.content,
   }));
+}
+
+/** The share of a model's prompt the repository's instruction files may use, at most 24,000 characters. */
+export function instructionBudget(maxPromptChars = MAX_PROMPT_CHARS): number {
+  return Math.min(24_000, Math.floor(maxPromptChars * 0.15));
+}
+
+/** The project's check command, found from its files; undefined if there isn't one. */
+async function findCheckCommand(ws: WritableWorkspace): Promise<string | undefined> {
+  try {
+    const files = await ws.listFiles();
+    const packageJson = files.includes('package.json') ? await ws.readFile('package.json') : undefined;
+    return detectCheckCommand(files, packageJson);
+  } catch {
+    return undefined;
+  }
 }
 
 /** Tool rounds per reply; the last round gets no tools, so the model must answer. */
@@ -505,8 +523,11 @@ export class ChatController {
       this.checkpoint = checkpoint;
     });
     const findSymbol = this.deps.findSymbol;
+    // The repository's instruction files and its check run on their own, nothing to set up.
+    const instructions = new Instructions(ws, instructionBudget(model.info.maxPromptChars));
+    const [rootInstructions, checkCommand] = await Promise.all([instructions.root(), findCheckCommand(ws)]);
     const wire: WireMessage[] = [
-      { role: 'system', content: await buildSystemPrompt(ws, true, true) },
+      { role: 'system', content: await buildSystemPrompt(ws, true, true, rootInstructions) },
       ...historyToWire(history),
     ];
     return runAgent({
@@ -531,6 +552,9 @@ export class ChatController {
       onThinking: () => this.deps.post({ type: 'thinking' }),
       onStep: on.onStep,
       onMove: on.onMove,
+      instructionsFor: (path) => instructions.forPath(path),
+      problems: ws.problems?.bind(ws),
+      checkCommand,
     });
   }
 

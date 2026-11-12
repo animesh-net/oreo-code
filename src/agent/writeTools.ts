@@ -1,3 +1,4 @@
+import type { Problem } from './instructions';
 import type { FunctionTool, ToolCall } from '../ollama/client';
 import { isSecretPath, type Workspace } from './workspaceTools';
 
@@ -17,6 +18,8 @@ export interface WritableWorkspace extends Workspace {
   unsavedFiles?(): string[];
   /** Why the path can't be written (a symbolic link, or outside the folder), or undefined. */
   writeProblem?(path: string): Promise<string | undefined>;
+  /** Errors VS Code's language support reports in a file; `wait` lets it re-check after a change first. */
+  problems?(path: string, wait: boolean): Promise<Problem[]>;
   /** Runs a command line in the folder's root with the user's shell. */
   runCommand(command: string, signal: AbortSignal): Promise<CommandResult>;
 }
