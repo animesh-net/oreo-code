@@ -134,6 +134,8 @@ export interface AgentDeps {
   problems?(path: string, wait: boolean): Promise<Problem[]>;
   /** The project's check (build, typecheck or tests), run when the agent says it's done. */
   checkCommand?: string;
+  /** How to start the app (`npm start`), run for a few seconds when it's done to see it works. */
+  startCommand?: string;
   maxSteps?: number;
 }
 
@@ -176,6 +178,8 @@ export async function runAgent(deps: AgentDeps): Promise<AgentResult> {
   const progress = { changes: 0, commands: 0 };
   /** Whether you were asked to allow the project check this task, and the answer. */
   const check = { asked: false, allowed: false };
+  /** The same for starting the app. */
+  const start = { asked: false, allowed: false };
   let changesAtCheck = -1;
 
   let n = 1;
@@ -254,7 +258,7 @@ export async function runAgent(deps: AgentDeps): Promise<AgentResult> {
       // failure not its own (e.g. already broken before the task). Report it and stop.
       if (progress.changes === changesAtCheck) break;
       changesAtCheck = progress.changes;
-      const failure = await verifyWork(deps, baseline, step, check);
+      const failure = await verifyWork(deps, baseline, step, check, start);
       if (!failure) {
         unresolved = undefined;
         break;
@@ -388,6 +392,7 @@ async function verifyWork(
   baseline: ReadonlyMap<string, Problem[]>,
   step: (s: AgentStep) => void,
   check: { asked: boolean; allowed: boolean },
+  start: { asked: boolean; allowed: boolean },
 ): Promise<string | undefined> {
   const failures: string[] = [];
   if (deps.problems) {
@@ -460,6 +465,29 @@ async function verifyWork(
       outcome: passed ? 'ok' : 'error',
     });
     if (!passed) failures.push(`The project check \`${deps.checkCommand}\` failed (${status}):\n${output}`);
+  }
+  // Code that parses and passes its checks can still crash when it runs: start the app
+  // for a few seconds. It runs your code, so like the check it asks once per task.
+  const smoke = deps.workspace.smokeRun?.bind(deps.workspace);
+  if (!failures.length && deps.startCommand && smoke) {
+    if (!start.asked) {
+      start.asked = true;
+      start.allowed = await deps.requestApproval({ kind: 'run_command', command: deps.startCommand });
+      if (deps.signal.aborted) throw abortError();
+      if (!start.allowed)
+        step({ title: `Skipped starting the app with \`${deps.startCommand}\` (rejected)`, outcome: 'rejected' });
+    }
+    if (start.allowed) {
+      const run = await smoke(deps.startCommand, deps.signal);
+      if (deps.signal.aborted) throw abortError();
+      step({
+        title: `Started the app with \`${deps.startCommand}\`: ${run.summary}`,
+        detail: clip(run.output),
+        outcome: run.ok ? 'ok' : 'error',
+      });
+      if (!run.ok)
+        failures.push(`Starting the app with \`${deps.startCommand}\` failed: it ${run.summary}.\n${run.output}`);
+    }
   }
   return failures.length ? failures.join('\n\n') : undefined;
 }

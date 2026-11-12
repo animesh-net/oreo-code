@@ -1,3 +1,4 @@
+import type { SmokeResult } from './smoke';
 import type { Problem } from './instructions';
 import type { FunctionTool, ToolCall } from '../ollama/client';
 import { isSecretPath, type Workspace } from './workspaceTools';
@@ -20,6 +21,8 @@ export interface WritableWorkspace extends Workspace {
   writeProblem?(path: string): Promise<string | undefined>;
   /** Errors VS Code's language support reports in a file; `wait` lets it re-check after a change first. */
   problems?(path: string, wait: boolean): Promise<Problem[]>;
+  /** Starts the app for a few seconds to see it runs (src/agent/smoke.ts). */
+  smokeRun?(command: string, signal: AbortSignal): Promise<SmokeResult>;
   /** Runs a command line in the folder's root with the user's shell. */
   runCommand(command: string, signal: AbortSignal): Promise<CommandResult>;
 }

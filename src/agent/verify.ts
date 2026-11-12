@@ -61,3 +61,22 @@ export function syntaxCheckCommand(changed: readonly string[]): string | undefin
     ? `python3 -c 'import ast,sys; [ast.parse(open(f).read(), f) for f in sys.argv[1:]]' ${files.join(' ')}`
     : undefined;
 }
+
+/**
+ * How to start the app, to see it runs: the project's `start` script, unless it watches
+ * or serves in development mode. Undefined without one.
+ */
+export function detectStartCommand(files: readonly string[], packageJson: string | undefined): string | undefined {
+  if (packageJson === undefined) return undefined;
+  let start: unknown;
+  try {
+    start = (JSON.parse(packageJson) as { scripts?: Record<string, unknown> }).scripts?.start;
+  } catch {
+    return undefined;
+  }
+  if (typeof start !== 'string' || /(--watch\b|\bwatch\b|nodemon)/i.test(start)) return undefined;
+  const root = new Set(files.filter((f) => !f.includes('/')).map((f) => f.toLowerCase()));
+  if (root.has('pnpm-lock.yaml')) return 'pnpm start';
+  if (root.has('yarn.lock')) return 'yarn start';
+  return 'npm start';
+}

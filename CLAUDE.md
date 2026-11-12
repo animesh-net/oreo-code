@@ -128,7 +128,8 @@ commit, pull request) through the local `github-mcp-server` over stdio.
 | `src/agent/writeTools.ts`           | Agent write tools (edit_file, create_file, run_command): path rules, diffs, applying                                       |
 | `src/agent/checkpoint.ts`           | "Undo task": each changed file's text from before the task, in memory                                                      |
 | `src/agent/instructions.ts`         | The repository's instruction files for the agent, and the errors a change added                                            |
-| `src/agent/verify.ts`               | The project check found from its files, run when the agent says it's done                                                  |
+| `src/agent/verify.ts`               | The project check and start command found from its files, run when the agent says it's done                                |
+| `src/agent/smoke.ts`                | Starts the app for a few seconds to see it runs and answers `/`                                                            |
 | `src/agent/findSymbol.ts`           | Read-only `find_symbol` over the completion symbol index                                                                   |
 | `src/agent/workspaceTools.ts`       | Read-only workspace tools (list, read, search); secret files refused                                                       |
 | `src/completion/`                   | Inline completion: repo snippets, symbol index, FIM prompt, budget, trimming; no `vscode`                                  |
@@ -224,10 +225,15 @@ commit, pull request) through the local `github-mcp-server` over stdio.
   counts, not only new ones, since a repeated message can hide a new error) and the
   project check from `detectCheckCommand` runs (without one, or if you reject it, `syntaxCheckCommand` parses
   the changed Python files, which runs no code and needs no card; JavaScript is left to
-  VS Code's own errors, as `node --check` misjudges JSX and Flow by Node version); failures go back to the model up to
+  VS Code's own errors, as `node --check` misjudges JSX and Flow by Node version). When all of
+  that passes and the project has a `start` script (`detectStartCommand`, not a watch mode),
+  `smokeRun` (`src/agent/smoke.ts`) starts the app for up to `SMOKE_RUN_MS` with a free
+  `PORT`, asks for `/` on the port it prints, and fails on a crash, a non-zero exit, a 5xx
+  answer or no answer; the process group is killed after. Failures go back to the model up to
   `MAX_VERIFY_ROUNDS` times, then the reply says they still fail. None of it needs a
-  setting; the project check runs code the agent may have changed, so it asks once per
-  task before its first run (rejecting skips it for that task), then runs on its own.
+  setting; the project check and starting the app run code the agent may have changed, so
+  each asks once per task before its first run (rejecting skips it for that task), then
+  runs on its own.
   The check command is never read from settings a repository could set. Agent mode is
   offered only for models with `supportsTools: true`; `find_symbol` reads the one
   symbol index completion keeps, never a second one.

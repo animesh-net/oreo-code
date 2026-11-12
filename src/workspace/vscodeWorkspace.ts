@@ -4,6 +4,7 @@ import * as nodePath from 'node:path';
 import * as vscode from 'vscode';
 import type { ActiveFile } from '../agent/workspaceTools';
 import type { Problem } from '../agent/instructions';
+import { smokeRun, type SmokeResult } from '../agent/smoke';
 import { COMMAND_TIMEOUT_MS, commandEnv, type CommandResult, type WritableWorkspace } from '../agent/writeTools';
 
 /** Folders never listed or read: dependencies, git internals and build output. */
@@ -167,6 +168,17 @@ class FolderWorkspace implements WritableWorkspace {
    * in a terminal there, so PATH tools (npm, dotnet) are found. Stopped after
    * COMMAND_TIMEOUT_MS or on Stop.
    */
+  smokeRun(command: string, signal: AbortSignal): Promise<SmokeResult> {
+    return smokeRun({
+      cwd: this.root,
+      command,
+      shell: process.env.SHELL || '/bin/zsh',
+      shellArgs: ['-lc'],
+      env: commandEnv(process.env),
+      signal,
+    });
+  }
+
   runCommand(command: string, signal: AbortSignal): Promise<CommandResult> {
     return new Promise((resolve) => {
       const shell = process.env.SHELL || '/bin/zsh';

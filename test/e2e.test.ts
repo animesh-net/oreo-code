@@ -86,7 +86,10 @@ describe('agent mode end to end, on disk', () => {
     expect(sent[1].at(-1)?.content).toMatch(/use read_file/);
     expect(sent[3].at(-1)?.content).toMatch(/leaves code out/);
     expect(run.steps.map((s) => s.title)).toContain('Checked 1 changed file: no errors');
-    expect(run.approvals).toEqual([]); // Auto-edit, no command run
+    expect(run.approvals).toEqual(['Run npm start']); // Auto-edit; only starting the app asks
+    expect(run.steps.at(-1)?.title).toMatch(
+      /^Started the app with `npm start`: started and kept running; GET \/ answered 200/,
+    );
     expect(await fixture('broken-server').verify(ws)).toMatchObject({ passed: true });
 
     // Undo puts the broken file back on disk.
@@ -117,9 +120,36 @@ describe('agent mode end to end, on disk', () => {
     const afterFirst = sent[3].at(-1)?.content ?? '';
     expect(afterFirst).toMatch(/Lines after this change moved by -4/);
     expect(afterFirst).toMatch(/still has errors|Errors in server\/index\.js/);
-    expect(run.steps.at(-1)?.title).toBe('Checked 1 changed file: no errors');
+    expect(run.steps.map((s) => s.title)).toContain('Checked 1 changed file: no errors');
     expect(await fixture('broken-server').verify(ws)).toMatchObject({ passed: true });
   });
+
+  it('starts the app and sends back a fix that parses but hangs on a request', async () => {
+    const ws = await workspace('broken-server');
+    // Keeps fs.existsSync, which fs/promises doesn't have: the request throws, the catch
+    // never ends the response, and the browser would wait forever.
+    const parsesButHangs = BROKEN_SERVER_JS.replace(
+      '    delete server\n',
+      '    }\n}\n\ncreateServer(serve).listen(PORT, () => console.log(`Listening on ${PORT}`));\n',
+    );
+    const { client, sent } = scripted([
+      [call('read_file', { path: 'server/index.js' })],
+      [call('write_file', { path: 'server/index.js', content: parsesButHangs })],
+      'Closed serve() and started the server.',
+      [call('write_file', { path: 'server/index.js', content: FIXED_SERVER_JS })],
+      'Removed the existsSync check; a missing file now answers 404.',
+    ]);
+    const run = await runTask({ ws, client, modelId: 'oreo-4b', task: fixture('broken-server').task });
+
+    expect(run.error).toBeUndefined();
+    expect(sent[3].at(-1)?.content).toMatch(
+      /Starting the app with `npm start` failed: it started, but GET \/ got no answer/,
+    );
+    expect(sent[3].at(-1)?.content).toMatch(/existsSync is not a function/);
+    expect(run.approvals).toEqual(['Run npm start']); // asked once; the second run went on its own
+    expect(run.steps.at(-1)?.title).toMatch(/GET \/ answered 200/);
+    expect(await fixture('broken-server').verify(ws)).toMatchObject({ passed: true });
+  }, 30_000);
 
   it("doesn't let a fix that leaves the file broken end the task", async () => {
     const ws = await workspace('broken-server');

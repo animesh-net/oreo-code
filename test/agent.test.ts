@@ -2,7 +2,7 @@ import { APIError } from 'openai';
 import { describe, expect, it } from 'vitest';
 import { Checkpoint } from '../src/agent/checkpoint';
 import { describeProblems, Instructions, newProblems, type Problem } from '../src/agent/instructions';
-import { detectCheckCommand, syntaxCheckCommand } from '../src/agent/verify';
+import { detectCheckCommand, detectStartCommand, syntaxCheckCommand } from '../src/agent/verify';
 import { FIND_SYMBOL_TOOL, runFindSymbol } from '../src/agent/findSymbol';
 import {
   AGENT_TEMPERATURE,
@@ -843,6 +843,18 @@ describe('repository instructions and checks', () => {
     expect(detectCheckCommand(['go.mod'], undefined)).toBe('go build ./...');
     expect(detectCheckCommand(['README.md'], undefined)).toBeUndefined();
     expect(detectCheckCommand(['package.json'], pkg({ start: 'node .' }))).toBeUndefined();
+  });
+
+  it('finds how to start the app, skipping watch modes', () => {
+    const pkg = (scripts: object) => JSON.stringify({ scripts });
+    expect(detectStartCommand(['package.json'], pkg({ start: 'node server/index.js' }))).toBe('npm start');
+    expect(detectStartCommand(['package.json', 'pnpm-lock.yaml'], pkg({ start: 'node .' }))).toBe('pnpm start');
+    expect(detectStartCommand(['package.json', 'yarn.lock'], pkg({ start: 'node .' }))).toBe('yarn start');
+    expect(detectStartCommand(['package.json'], pkg({ start: 'nodemon index.js' }))).toBeUndefined();
+    expect(detectStartCommand(['package.json'], pkg({ start: 'node --watch .' }))).toBeUndefined();
+    expect(detectStartCommand(['package.json'], pkg({ test: 'vitest' }))).toBeUndefined();
+    expect(detectStartCommand(['package.json'], '{not json')).toBeUndefined();
+    expect(detectStartCommand(['main.py'], undefined)).toBeUndefined();
   });
 
   it('shows a change the errors it added, so the model fixes them', async () => {

@@ -3,6 +3,7 @@ import { lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } fro
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import type { Problem } from '../../src/agent/instructions';
+import { smokeRun, type SmokeResult } from '../../src/agent/smoke';
 import { COMMAND_TIMEOUT_MS, commandEnv, type CommandResult, type WritableWorkspace } from '../../src/agent/writeTools';
 
 /** Folders a project listing leaves out, as VS Code's does. */
@@ -120,6 +121,10 @@ export class DiskWorkspace implements WritableWorkspace {
     const message =
       /(SyntaxError|IndentationError|TabError): .*/.exec(out)?.[0] ?? out.trim().split('\n').at(-1) ?? 'error';
     return [{ line, message }];
+  }
+
+  smokeRun(command: string, signal: AbortSignal): Promise<SmokeResult> {
+    return smokeRun({ cwd: this.root, command, shell: '/bin/sh', env: commandEnv(process.env), signal, runMs: 3_000 });
   }
 
   runCommand(command: string, signal: AbortSignal): Promise<CommandResult> {
