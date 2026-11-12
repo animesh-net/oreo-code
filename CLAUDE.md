@@ -178,8 +178,9 @@ commit, pull request) through the local `github-mcp-server` over stdio.
   through the prompt.
 - **Agent mode writes only with approval.** `runAgent` (`src/agent/loop.ts`) sends
   every write tool through `needsApproval` (`src/agent/policy.ts`): `run_command`
-  always asks; `edit_file` and `create_file` ask unless "Approve edits for this task"
-  is on, which resets when the task ends and never covers a file that decides what
+  always asks; `edit_file` and `create_file` ask unless Auto-edit ("Apply edits without asking")
+  is on (the default; it and the Agent switch are remembered across reloads in
+  `globalState`), which never covers a file that decides what
   runs (`runsCode`: scripts, hooks, build, CI, package lists and settings,
   code-based tool configs and editor task files). The card shows
   the whole change, never a cut one (`MAX_WRITE_CHARS` caps file size instead), and a

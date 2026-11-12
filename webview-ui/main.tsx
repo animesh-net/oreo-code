@@ -21,7 +21,7 @@ const emptyState: ViewState = {
   messages: [],
   busy: false,
   agentMode: false,
-  approveEdits: false,
+  approveEdits: true,
   hasFolder: false,
 };
 
@@ -160,16 +160,6 @@ function App() {
             }
           }}
         />
-        {agentOn && (
-          <label class="approve-edits">
-            <input
-              type="checkbox"
-              checked={state.approveEdits}
-              onChange={(e) => vscode.postMessage({ type: 'setApproveEdits', on: e.currentTarget.checked })}
-            />
-            Approve edits for this task (commands still ask)
-          </label>
-        )}
         <div class="composer-row">
           {menuOpen && <button class="dismiss" aria-label="Close menu" onClick={() => setMenuOpen(false)} />}
           <div class="anchor">
@@ -237,13 +227,28 @@ function App() {
               aria-pressed={agentOn}
               title={
                 agentOn
-                  ? 'Agent mode is on: Oreo Code may edit files and run commands, each with your approval.'
+                  ? 'Agent mode is on: Oreo Code may edit files and run commands; commands always ask first.'
                   : 'Turn on agent mode'
               }
               disabled={state.busy}
               onClick={() => vscode.postMessage({ type: 'setAgentMode', on: !agentOn })}
             >
               Agent
+            </button>
+          )}
+          {agentOn && (
+            <button
+              class="pill agent small"
+              aria-pressed={state.approveEdits}
+              aria-label="Apply edits without asking"
+              title={
+                state.approveEdits
+                  ? 'Edits apply without asking. Commands and files that run code still ask. Click to review every edit.'
+                  : 'Every edit asks first. Click to apply edits without asking.'
+              }
+              onClick={() => vscode.postMessage({ type: 'setApproveEdits', on: !state.approveEdits })}
+            >
+              Auto-edit
             </button>
           )}
           {state.busy ? (

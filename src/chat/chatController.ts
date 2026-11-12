@@ -35,6 +35,9 @@ export interface ChatControllerDeps {
   getEffort(): ReasoningEffort | undefined;
   /** Remembers the thinking effort picked in the dropdown. */
   rememberEffort(effort: ReasoningEffort): void;
+  /** Agent mode and "Apply edits without asking" as you last set them; remembered across reloads. */
+  getAgentSettings?(): { agentMode?: boolean; approveEdits?: boolean };
+  rememberAgentSettings?(settings: { agentMode: boolean; approveEdits: boolean }): void;
   createClient(ollamaUrl: string): ModelClient;
   /**
    * Other addresses to try when nothing answers at a local URL (127.0.0.1 or
@@ -158,8 +161,9 @@ export class ChatController {
   private error: string | undefined;
   private abort: AbortController | undefined;
   private refreshSeq = 0;
-  private agentMode = false;
-  private approveEdits = false;
+  private agentMode: boolean;
+  /** On unless you switch it off: edits apply without a card; commands and files that run code still ask. */
+  private approveEdits: boolean;
   private approval: { request: ApprovalRequest; answer(approved: boolean): void } | undefined;
   private approvalSeq = 0;
   /** Bumped by New chat, so a task stopped by it doesn't write into the new chat. */
@@ -167,7 +171,15 @@ export class ChatController {
   /** What the last agent task changed, for "Undo task". */
   private checkpoint: Checkpoint | undefined;
 
-  constructor(private readonly deps: ChatControllerDeps) {}
+  constructor(private readonly deps: ChatControllerDeps) {
+    const saved = deps.getAgentSettings?.() ?? {};
+    this.agentMode = saved.agentMode ?? false;
+    this.approveEdits = saved.approveEdits ?? true;
+  }
+
+  private rememberAgentSettings(): void {
+    this.deps.rememberAgentSettings?.({ agentMode: this.agentMode, approveEdits: this.approveEdits });
+  }
 
   /** Re-reads the Ollama URL setting, then reloads the model list. */
   async refresh(): Promise<void> {
@@ -301,11 +313,13 @@ export class ChatController {
       case 'setAgentMode':
         if (!this.busy) {
           this.agentMode = message.on;
+          this.rememberAgentSettings();
           this.publish();
         }
         return;
       case 'setApproveEdits':
         this.approveEdits = message.on;
+        this.rememberAgentSettings();
         this.publish();
         return;
       case 'approval':
@@ -470,8 +484,6 @@ export class ChatController {
       }
     } finally {
       this.busy = false;
-      // "Approve edits for this task" covers one task only.
-      this.approveEdits = false;
       if (this.abort === abort) this.abort = undefined;
       this.publish();
     }

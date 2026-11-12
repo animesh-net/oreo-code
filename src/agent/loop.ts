@@ -41,7 +41,7 @@ export interface AgentDeps {
   readTools: FunctionTool[];
   runRead(call: ToolCall): Promise<ToolResult>;
   workspace: WritableWorkspace;
-  /** "Approve edits for this task", read at each write so a change mid-task counts. */
+  /** "Apply edits without asking", read at each write so a change mid-task counts. */
   approveEdits(): boolean;
   /** Shows the approval card; resolves false on Reject or Stop. */
   requestApproval(pending: PendingWrite): Promise<boolean>;

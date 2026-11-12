@@ -59,7 +59,7 @@ function githubWriteProblem(tool: string, args: Record<string, unknown>): string
 /**
  * Files that decide what runs: scripts, hooks, build and CI files, editor tasks. An
  * edit to one could change what an approved command (e.g. "npm test") or VS Code
- * does, so it always asks, even with "Approve edits for this task" on.
+ * does, so it always asks, even with "Apply edits without asking" on.
  */
 const RUNS_CODE = [
   /(^|\/)package\.json$/i,
@@ -87,7 +87,7 @@ export function runsCode(path: string): boolean {
 /**
  * Whether agent mode's own write tools (src/agent/writeTools.ts) need your approval.
  * A command always does. Edits and new files do unless you switched on "Approve
- * edits for this task", which covers only those two, only that task, and never a
+ * edits without asking" (on by default), which covers only those two and never a
  * file that decides what runs (runsCode).
  */
 export function needsApproval(

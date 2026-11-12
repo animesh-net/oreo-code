@@ -647,6 +647,7 @@ describe('agent mode in the chat', () => {
       'Changed a.ts.',
     ]);
     await controller.handle({ type: 'setAgentMode', on: true });
+    await controller.handle({ type: 'setApproveEdits', on: false });
     const task = controller.handle({ type: 'send', text: 'change x' });
     for (let i = 0; i < 20 && !controller.state.approval; i++) await tick();
     const approval = controller.state.approval;
@@ -701,8 +702,43 @@ describe('agent mode in the chat', () => {
     expect(ws.commands).toEqual([]);
     expect(controller.state.approval).toBeUndefined();
     expect(controller.state.busy).toBe(false);
-    // "Approve edits for this task" ends with the task.
-    expect(controller.state.approveEdits).toBe(false);
+    // Your settings stay as you set them.
+    expect(controller.state).toMatchObject({ agentMode: true, approveEdits: true });
+  });
+
+  it('applies edits without asking by default, and remembers the Agent switch and the box', async () => {
+    const saved: { agentMode: boolean; approveEdits: boolean }[] = [];
+    const { ws, controller } = await setup([
+      [call('edit_file', { path: 'a.ts', old_text: 'x', new_text: 'y' })],
+      'Changed.',
+    ]);
+    (
+      controller as unknown as { deps: { rememberAgentSettings: (s: (typeof saved)[0]) => void } }
+    ).deps.rememberAgentSettings = (s) => saved.push(s);
+    expect(controller.state).toMatchObject({ agentMode: false, approveEdits: true });
+    await controller.handle({ type: 'setAgentMode', on: true });
+    await controller.handle({ type: 'send', text: 'change x' });
+    expect(ws.files['a.ts']).toBe('y'); // no card
+    expect(controller.state.agentMode).toBe(true); // still on after the reply
+    await controller.handle({ type: 'setApproveEdits', on: false });
+    expect(saved).toEqual([
+      { agentMode: true, approveEdits: true },
+      { agentMode: true, approveEdits: false },
+    ]);
+  });
+
+  it('starts with the agent settings you saved last time', () => {
+    const controller = new ChatController({
+      getOllamaUrl: () => '',
+      getLastModel: () => undefined,
+      rememberModel: () => {},
+      getEffort: () => undefined,
+      rememberEffort: () => {},
+      createClient: () => scripted([]),
+      post: () => {},
+      getAgentSettings: () => ({ agentMode: true, approveEdits: false }),
+    });
+    expect(controller.state).toMatchObject({ agentMode: true, approveEdits: false });
   });
 
   it('keeps chatting normally with a model that has no tools, even in agent mode', async () => {
