@@ -1097,3 +1097,52 @@ describe('edits with tidied spacing', () => {
     expect(d.steps[0].title).toBe("Couldn't edit file a.js");
   });
 });
+
+describe('loose edits keep the file tidy', () => {
+  it("moves the new lines to the file's indentation", async () => {
+    const ws = memoryWorkspace({
+      'a.py': 'def f():\n        if ready_to_go:\n                go_now()\n        return 1\n',
+    });
+    const prepared = await prepareWrite(
+      ws,
+      call('edit_file', {
+        path: 'a.py',
+        old_text: '    if ready_to_go:\n        go_now()',
+        new_text: '    if ready_to_go:\n        go_now()\n        stop_now()',
+      }),
+    );
+    if (!('pending' in prepared)) throw new Error(`expected pending: ${JSON.stringify(prepared)}`);
+    await applyWrite(ws, prepared.pending, new AbortController().signal, () => {});
+    expect(ws.files['a.py']).toBe(
+      'def f():\n        if ready_to_go:\n                go_now()\n                stop_now()\n        return 1\n',
+    );
+  });
+
+  it('keeps tabs in a tab-indented file, also for a deeper new level', async () => {
+    const ws = memoryWorkspace({ 'c.go': 'func f() {\n\tif readyToGo {\n\t\tgoNow()\n\t}\n}\n' });
+    const prepared = await prepareWrite(
+      ws,
+      call('edit_file', {
+        path: 'c.go',
+        old_text: '    if readyToGo {\n        goNow()',
+        new_text: '    if readyToGo {\n        goNow()\n        if late {\n            hurry()\n        }',
+      }),
+    );
+    if (!('pending' in prepared)) throw new Error(`expected pending: ${JSON.stringify(prepared)}`);
+    await applyWrite(ws, prepared.pending, new AbortController().signal, () => {});
+    expect(ws.files['c.go']).toBe(
+      'func f() {\n\tif readyToGo {\n\t\tgoNow()\n\t\tif late {\n\t\t\thurry()\n\t\t}\n\t}\n}\n',
+    );
+  });
+
+  it('removes whole lines when the edit deletes them', async () => {
+    const ws = memoryWorkspace({ 'b.js': 'a();\n  removeTheOldThing(  1 );\nb();\n' });
+    const prepared = await prepareWrite(
+      ws,
+      call('edit_file', { path: 'b.js', old_text: 'removeTheOldThing(1);', new_text: '' }),
+    );
+    if (!('pending' in prepared)) throw new Error('expected pending');
+    await applyWrite(ws, prepared.pending, new AbortController().signal, () => {});
+    expect(ws.files['b.js']).toBe('a();\nb();\n');
+  });
+});

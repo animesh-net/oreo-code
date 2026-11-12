@@ -275,6 +275,70 @@ export function findIgnoringWhitespace(text: string, needle: string): { start: n
   return found;
 }
 
+/**
+ * Puts newText where a whitespace-insensitive match was found. Its lines are moved to the
+ * file's indentation (the model's may differ, which breaks Python), and deleting whole
+ * lines takes the lines away rather than leaving them blank.
+ */
+function replaceLoose(text: string, match: { start: number; end: number }, oldText: string, newText: string): string {
+  let { start, end } = match;
+  const lineStart = text.lastIndexOf('\n', start - 1) + 1;
+  const fileIndent = text.slice(lineStart, start);
+  const body = newText.replace(/^\s*\n/, '').replace(/\s+$/, '');
+  if (!body.trim()) {
+    const lineEnd = text.indexOf('\n', end);
+    const after = text.slice(end, lineEnd < 0 ? text.length : lineEnd);
+    if (!fileIndent.trim() && !after.trim()) {
+      start = lineStart;
+      end = lineEnd < 0 ? text.length : lineEnd + 1;
+    }
+    return text.slice(0, start) + text.slice(end);
+  }
+  const lines = body.split('\n');
+  // Matched mid-line: nothing to line up with, so the lines go in as the model wrote them.
+  const indentOf = fileIndent.trim() ? undefined : indentTranslator(text.slice(lineStart, end), oldText);
+  const moved = lines.map((line, i) => {
+    if (i === 0) return line.trimStart();
+    if (!indentOf || !line.trim()) return line;
+    const own = /^[ \t]*/.exec(line)?.[0] ?? '';
+    return indentOf(own) + line.slice(own.length);
+  });
+  return text.slice(0, start) + moved.join('\n') + text.slice(end);
+}
+
+const indentWidth = (s: string) => s.replace(/\t/g, '    ').length;
+
+/**
+ * Maps the model's indentation to the file's, learned from the lines of old_text and the
+ * file lines they matched: the same levels when known, otherwise the same step per level.
+ */
+function indentTranslator(region: string, oldText: string): (indent: string) => string {
+  const squeeze = (s: string) => s.replace(/\s+/g, '');
+  const lead = (s: string) => /^[ \t]*/.exec(s)?.[0] ?? '';
+  const fileLines = region.split('\n');
+  const known = new Map<number, string>();
+  let j = 0;
+  for (const line of oldText.split('\n').filter((l) => l.trim())) {
+    while (j < fileLines.length && squeeze(fileLines[j]) !== squeeze(line)) j++;
+    if (j >= fileLines.length) break;
+    known.set(indentWidth(lead(line)), lead(fileLines[j]));
+    j++;
+  }
+  const pairs = [...known].sort((a, b) => a[0] - b[0]);
+  const unit = pairs.some(([, f]) => f.includes('\t')) ? '\t' : ' ';
+  return (indent) => {
+    const width = indentWidth(indent);
+    const exact = known.get(width);
+    if (exact !== undefined) return exact;
+    if (!pairs.length) return indent;
+    const [m1, f1] = pairs[0];
+    const [m2, f2] = pairs.length > 1 ? pairs[pairs.length - 1] : [m1, f1];
+    const step = m2 > m1 ? (indentWidth(f2) - indentWidth(f1)) / (m2 - m1) : 1;
+    const target = Math.max(0, Math.round(indentWidth(f1) + (width - m1) * step));
+    return unit === '\t' ? '\t'.repeat(Math.round(target / 4)) : ' '.repeat(target);
+  };
+}
+
 const MAX_NEAR_CHARS = 1_500;
 
 /**
@@ -393,10 +457,7 @@ function replaceExactlyOnce(
     // Models often copy code with the spacing tidied ("return true } catch" for
     // "return true}catch"). Matching while ignoring whitespace is safe when it's unique.
     const loose = findIgnoringWhitespace(text, oldText);
-    if (loose.length === 1) {
-      const { start, end } = loose[0];
-      return { text: text.slice(0, start) + newText.trim() + text.slice(end) };
-    }
+    if (loose.length === 1) return { text: replaceLoose(text, loose[0], oldText, newText) };
     if (loose.length > 1) {
       return { error: `Error: old_text appears ${loose.length} times in ${path}. Include more lines so it is unique.` };
     }
