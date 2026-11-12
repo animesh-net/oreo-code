@@ -52,6 +52,46 @@ export function announcesAction(text: string): boolean {
   );
 }
 
+const NOT_CHANGED =
+  'Your reply says files were changed, but no file has been changed in this task: describing a fix does not make it. If the task needs changes, make them now with edit_file or create_file. If you meant changes from an earlier task, or none are needed, say that instead.';
+
+const CLAIM =
+  /\b(files? (changed|modified|updated)|changes? (made|applied)|i('ve| have)? (now )?(fixed|updated|changed|modified|edited|rewritten|rewrote|removed|added|created|replaced|refactored)|(has|have) been (fixed|updated|changed|modified|rewritten|removed|added|created))\b/gi;
+/** Words just before a claim that turn it around: "no files changed", "nothing has been fixed". */
+const NEGATED = /\b(no|not|nothing|never|none|n't|without)\b[\s\w]{0,12}$/i;
+/** A claim about another time ("in the last task I fixed…", "earlier I updated…"). */
+const ELSEWHEN = /\b(earlier|before|previously|last (task|time)|in the (last|previous) task)\b/i;
+
+/**
+ * True when a reply says files were changed ("Files changed:", "I fixed…", "…has been
+ * updated"), not negated and not about an earlier task. Checked only when the task
+ * changed no file and ran no command, so a claim there is a mistake.
+ */
+export function claimsChanges(text: string): boolean {
+  for (const m of text.matchAll(CLAIM)) {
+    const before = text.slice(Math.max(0, m.index - 40), m.index);
+    if (!NEGATED.test(before) && !ELSEWHEN.test(sentenceAround(text, m.index, m.index + m[0].length))) return true;
+  }
+  return false;
+}
+
+/** A sentence ends at . ! or ? followed by a space or the end, or at a line break; "index.js" doesn't end one. */
+const SENTENCE_END = /[.!?](?=\s|$)|\n/g;
+
+/** The sentence holding text[from..to]. */
+function sentenceAround(text: string, from: number, to: number): string {
+  let start = 0;
+  let end = text.length;
+  for (const m of text.matchAll(SENTENCE_END)) {
+    if (m.index < from) start = m.index + 1;
+    else if (m.index >= to) {
+      end = m.index;
+      break;
+    }
+  }
+  return text.slice(start, end);
+}
+
 export interface AgentModel {
   client: ModelClient;
   info: ModelInfo;
@@ -125,9 +165,12 @@ export async function runAgent(deps: AgentDeps): Promise<AgentResult> {
   const baseline = new Map<string, Problem[]>();
   let verifyRounds = 0;
   let nudges = 0;
+  /** The last reply claimed changes, but the task changed no file. */
+  let unchangedClaim = false;
+  let claimAsked = false;
   let unresolved: string | undefined;
   /** Files changed so far, and how many had changed at the last check. */
-  const progress = { changes: 0 };
+  const progress = { changes: 0, commands: 0 };
   /** Whether you were asked to allow the project check this task, and the answer. */
   const check = { asked: false, allowed: false };
   let changesAtCheck = -1;
@@ -182,6 +225,18 @@ export async function runAgent(deps: AgentDeps): Promise<AgentResult> {
         deps.wire.push({ role: 'assistant', content: text });
         deps.wire.push({ role: 'user', content: GO_ON });
         continue;
+      }
+      // Or it says it changed files when this task changed none and ran no command (which
+      // could have changed files): the change never happened. Asked once; a wrong guess
+      // costs one extra model call.
+      if (deps.checkpoint.isEmpty && progress.commands === 0 && claimsChanges(text)) {
+        if (offered && !claimAsked) {
+          claimAsked = true;
+          deps.wire.push({ role: 'assistant', content: text });
+          deps.wire.push({ role: 'user', content: NOT_CHANGED });
+          continue;
+        }
+        unchangedClaim = true;
       }
       // Done, says the model. A task that changed files ends only with working code:
       // no new errors and a passing project check, or the failure goes back to fix.
@@ -264,6 +319,11 @@ export async function runAgent(deps: AgentDeps): Promise<AgentResult> {
       // The work is done; a failed summary only loses the summary, unless you pressed Stop.
       if (deps.signal.aborted) throw err;
     }
+  }
+  if (unchangedClaim && deps.checkpoint.isEmpty) {
+    const note = "\n\nNote: this task didn't change any file.";
+    reply += note;
+    deps.onText(note);
   }
   if (unresolved) {
     const note = `\n\nThe checks still fail, so this isn't working yet:\n\n${unresolved}`;
@@ -366,7 +426,7 @@ async function runWrite(
   call: ToolCall,
   step: (s: AgentStep) => void,
   baseline: Map<string, Problem[]>,
-  progress: { changes: number },
+  progress: { changes: number; commands: number },
 ): Promise<string> {
   const prepared = await prepareWrite(deps.workspace, call);
   if ('error' in prepared) {
@@ -396,6 +456,7 @@ async function runWrite(
     result = `Error: ${(err as Error).message}`;
   }
   if (deps.signal.aborted) throw abortError();
+  if (pending.kind === 'run_command') progress.commands++;
   if (path && !result.startsWith('Error')) {
     progress.changes++;
     if (deps.problems) {

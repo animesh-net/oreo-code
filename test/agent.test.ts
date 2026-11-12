@@ -6,6 +6,7 @@ import { detectCheckCommand } from '../src/agent/verify';
 import { FIND_SYMBOL_TOOL, runFindSymbol } from '../src/agent/findSymbol';
 import {
   announcesAction,
+  claimsChanges,
   MALFORMED_TWICE,
   MAX_AGENT_STEPS,
   MAX_NUDGES,
@@ -975,5 +976,64 @@ describe('announced but not done', () => {
     const client = scripted(["I'll do it."]);
     await runAgent(deps(client, ws));
     expect(client.calls).toHaveLength(1 + MAX_NUDGES);
+  });
+});
+
+describe('claims changes it never made', () => {
+  it('knows a reply that claims changes', () => {
+    expect(claimsChanges('Files changed:\n- server/index.js — fixed HTTP creation')).toBe(true);
+    expect(claimsChanges("I've updated the handler to use async.")).toBe(true);
+    expect(claimsChanges('The duplicate call has been removed.')).toBe(true);
+    expect(claimsChanges('The bug is on line 6: the handler is inside the options object.')).toBe(false);
+    expect(claimsChanges('No changes made: the code is already correct.')).toBe(false);
+    expect(claimsChanges('Nothing has been changed yet.')).toBe(false);
+    expect(claimsChanges('No files changed.')).toBe(false);
+    expect(claimsChanges('In the last task I fixed the import.')).toBe(false);
+    expect(claimsChanges('No files changed. I fixed the import in a.js.')).toBe(true);
+    // A dot in a file name doesn't end a sentence; the next sentence isn't part of this one.
+    expect(claimsChanges('Earlier, in server/index.js I fixed the import.')).toBe(false);
+    expect(claimsChanges('I fixed a.js. The bug was there before.')).toBe(true);
+    expect(claimsChanges("I didn't touch b.js, but I fixed a.js.")).toBe(true);
+  });
+
+  it("doesn't question a claim after a command ran, which may have changed files", async () => {
+    const ws = memoryWorkspace({});
+    const client = scripted([[call('run_command', { command: 'npm install' })], 'I updated your dependencies.']);
+    const result = await runAgent(deps(client, ws));
+    expect(client.calls).toHaveLength(2);
+    expect(result.reply).toBe('I updated your dependencies.');
+  });
+
+  it('tells the model no file was changed, and it makes the change', async () => {
+    const ws = memoryWorkspace({ 'server/index.js': 'bad' });
+    const client = scripted([
+      [call('search', { query: 'error' })],
+      'Files changed:\n- server/index.js — fixed the handler.',
+      [call('edit_file', { path: 'server/index.js', old_text: 'bad', new_text: 'good' }, 'c2')],
+      'Fixed the handler in server/index.js.',
+    ]);
+    const result = await runAgent(deps(client, ws, { approveEdits: () => true }));
+    expect(ws.files['server/index.js']).toBe('good');
+    expect(client.calls[2].wire.at(-1)?.content).toMatch(/no file has been changed in this task/);
+    expect(result.reply).not.toMatch(/Note: this task/);
+  });
+
+  it('asks once, then says plainly that nothing changed if the model keeps claiming it did', async () => {
+    const ws = memoryWorkspace({ 'a.js': 'x' });
+    const client = scripted(['Files changed: a.js — fixed.']);
+    const result = await runAgent(deps(client, ws));
+    expect(client.calls).toHaveLength(2);
+    expect(result.reply).toMatch(/Note: this task didn't change any file\.$/);
+  });
+
+  it('leaves a real report of changes alone', async () => {
+    const ws = memoryWorkspace({ 'a.js': 'x' });
+    const client = scripted([
+      [call('edit_file', { path: 'a.js', old_text: 'x', new_text: 'y' })],
+      "I've updated a.js.",
+    ]);
+    const result = await runAgent(deps(client, ws, { approveEdits: () => true }));
+    expect(client.calls).toHaveLength(2);
+    expect(result.reply).toBe("I've updated a.js.");
   });
 });
