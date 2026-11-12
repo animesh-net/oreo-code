@@ -80,3 +80,28 @@ export function detectStartCommand(files: readonly string[], packageJson: string
   if (root.has('yarn.lock')) return 'yarn start';
   return 'npm start';
 }
+
+/** Server frameworks: a project that depends on one is a server. */
+const SERVER_PACKAGES = /^(express|fastify|koa|@hapi\/hapi|@nestjs\/core|hono|polka|restify|http-server|serve)$/;
+/** A task about serving: "so the app runs and serves index.html", "listen on port 3000". */
+const SERVER_TASK = /\b(serv(e|es|ed|ing|er|ers)|port|localhost|https?|endpoints?|routes?|web ?app|website)\b/i;
+
+/**
+ * Whether the app should stay up and answer requests, so that starting it and
+ * exiting at once, or answering nothing, is a failure rather than "ran and finished".
+ */
+export function expectsServer(task: string, packageJson: string | undefined): boolean {
+  if (SERVER_TASK.test(task)) return true;
+  if (packageJson === undefined) return false;
+  try {
+    const pkg = JSON.parse(packageJson) as { dependencies?: object; devDependencies?: object };
+    return Object.keys({ ...pkg.dependencies, ...pkg.devDependencies }).some((d) => SERVER_PACKAGES.test(d));
+  } catch {
+    return false;
+  }
+}
+
+/** A command that starts the app the way the run check does (`npm start`, `yarn run start`). */
+export function startsApp(command: string): boolean {
+  return /^\s*(npm|pnpm|yarn|bun)\s+(run\s+)?start\s*$/.test(command);
+}

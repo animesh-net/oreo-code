@@ -151,6 +151,34 @@ describe('agent mode end to end, on disk', () => {
     expect(await fixture('broken-server').verify(ws)).toMatchObject({ passed: true });
   }, 30_000);
 
+  it('sends back a server fix that never listens, and the model starting it itself', async () => {
+    const ws = await workspace('broken-server');
+    // What Oreo 4B did in the eval: a fix that parses but never calls listen, so
+    // `npm start` exits at once; then trying to start the server by hand.
+    const noListen = FIXED_SERVER_JS.replace(
+      /createServer\(serve\)\.listen[^\n]*/,
+      'export const server = createServer(serve);',
+    );
+    const { client, sent } = scripted([
+      [call('read_file', { path: 'server/index.js' })],
+      [call('write_file', { path: 'server/index.js', content: noListen })],
+      [call('run_command', { command: 'npm start &' })], // refused
+      [call('run_command', { command: 'npm start' })], // refused too: it would block until stopped
+      'Fixed the server.', // started: exits at once, sent back
+      [call('write_file', { path: 'server/index.js', content: FIXED_SERVER_JS })],
+      'Added the listen call.',
+    ]);
+    const run = await runTask({ ws, client, modelId: 'oreo-4b', task: fixture('broken-server').task });
+
+    expect(run.error).toBeUndefined();
+    expect(sent[3].at(-1)?.content).toMatch(/don't start the app or a server yourself/);
+    expect(sent[4].at(-1)?.content).toMatch(/don't start the app or a server yourself/);
+    expect(sent[5].at(-1)?.content).toMatch(/exited at once \(exit 0\) instead of staying up/);
+    expect(run.approvals).toEqual(['Run npm start']); // only the run check's own start
+    expect(run.steps.at(-1)?.title).toMatch(/GET \/ answered 200/);
+    expect(await fixture('broken-server').verify(ws)).toMatchObject({ passed: true });
+  }, 30_000);
+
   it("doesn't let a fix that leaves the file broken end the task", async () => {
     const ws = await workspace('broken-server');
     const { client, sent } = scripted([

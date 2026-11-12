@@ -229,7 +229,11 @@ commit, pull request) through the local `github-mcp-server` over stdio.
   that passes and the project has a `start` script (`detectStartCommand`, not a watch mode),
   `smokeRun` (`src/agent/smoke.ts`) starts the app for up to `SMOKE_RUN_MS` with a free
   `PORT`, asks for `/` on the port it prints, and fails on a crash, a non-zero exit, a 5xx
-  answer or no answer; the process group is killed after. Failures go back to the model up to
+  answer or no answer; for a server (`expectsServer`: the task is about serving or the
+  project depends on a server framework) exiting at once or nothing answering on its port
+  fails too. `run_command` refuses background commands (`&`, `nohup`) and `npm start`
+  (`startsApp`), since it waits for a command and a server started that way can't be
+  reached. The process group is killed after. Failures go back to the model up to
   `MAX_VERIFY_ROUNDS` times, then the reply says they still fail. None of it needs a
   setting; the project check and starting the app run code the agent may have changed, so
   each asks once per task before its first run (rejecting skips it for that task), then

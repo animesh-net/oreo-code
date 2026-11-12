@@ -2,7 +2,13 @@ import { APIError } from 'openai';
 import { describe, expect, it } from 'vitest';
 import { Checkpoint } from '../src/agent/checkpoint';
 import { describeProblems, Instructions, newProblems, type Problem } from '../src/agent/instructions';
-import { detectCheckCommand, detectStartCommand, syntaxCheckCommand } from '../src/agent/verify';
+import {
+  detectCheckCommand,
+  detectStartCommand,
+  expectsServer,
+  startsApp,
+  syntaxCheckCommand,
+} from '../src/agent/verify';
 import { FIND_SYMBOL_TOOL, runFindSymbol } from '../src/agent/findSymbol';
 import {
   AGENT_TEMPERATURE,
@@ -857,6 +863,22 @@ describe('repository instructions and checks', () => {
     expect(detectStartCommand(['main.py'], undefined)).toBeUndefined();
   });
 
+  it('tells a server app from one that just runs', () => {
+    expect(expectsServer('fix issues in my code so the app runs and serves public/index.html', undefined)).toBe(true);
+    expect(expectsServer('make it listen on port 8080', undefined)).toBe(true);
+    expect(expectsServer('fix the failing slugify test', JSON.stringify({ dependencies: { express: '^4' } }))).toBe(
+      true,
+    );
+    expect(expectsServer('fix the failing slugify test', JSON.stringify({ dependencies: { lodash: '^4' } }))).toBe(
+      false,
+    );
+    expect(expectsServer('rename the variable', '{not json')).toBe(false);
+    expect(startsApp('npm start')).toBe(true);
+    expect(startsApp('yarn run start')).toBe(true);
+    expect(startsApp('npm run start:prod')).toBe(false);
+    expect(startsApp('npm test')).toBe(false);
+  });
+
   it('shows a change the errors it added, so the model fixes them', async () => {
     const ws = memoryWorkspace({ 'a.ts': 'let x = 1;' });
     const errors: Record<string, Problem[]> = { 'a.ts': [] };
@@ -1203,6 +1225,22 @@ describe('step limit, file-reading commands and the syntax check', () => {
       'ls .venv/lib',
       'head -20 /etc/hosts',
     ]) {
+      expect('pending' in (await prepareWrite(ws, call('run_command', { command })))).toBe(true);
+    }
+  });
+
+  it('refuses a server sent to the background, since run_command waits for it and stops it', async () => {
+    const ws = memoryWorkspace({});
+    for (const command of [
+      'npm start &',
+      'node server/index.js & ',
+      'nohup node server.js',
+      'pkill node; npm start &',
+    ]) {
+      const r = await prepareWrite(ws, call('run_command', { command }));
+      expect('error' in r && r.error).toMatch(/don't start the app or a server yourself/);
+    }
+    for (const command of ['npm run build && npm test', 'make 2>&1', 'echo a && echo b']) {
       expect('pending' in (await prepareWrite(ws, call('run_command', { command })))).toBe(true);
     }
   });

@@ -168,7 +168,7 @@ class FolderWorkspace implements WritableWorkspace {
    * in a terminal there, so PATH tools (npm, dotnet) are found. Stopped after
    * COMMAND_TIMEOUT_MS or on Stop.
    */
-  smokeRun(command: string, signal: AbortSignal): Promise<SmokeResult> {
+  smokeRun(command: string, signal: AbortSignal, server: boolean): Promise<SmokeResult> {
     return smokeRun({
       cwd: this.root,
       command,
@@ -176,6 +176,7 @@ class FolderWorkspace implements WritableWorkspace {
       shellArgs: ['-lc'],
       env: commandEnv(process.env),
       signal,
+      server,
     });
   }
 

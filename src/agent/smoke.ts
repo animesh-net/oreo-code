@@ -42,6 +42,8 @@ export async function smokeRun(opts: {
   env: NodeJS.ProcessEnv;
   signal: AbortSignal;
   runMs?: number;
+  /** The app should stay up and answer `/`: exiting at once or answering nothing fails. */
+  server?: boolean;
 }): Promise<SmokeResult> {
   const port = await freePort();
   const child = spawn(opts.shell, [...(opts.shellArgs ?? ['-c']), opts.command], {
@@ -85,7 +87,10 @@ export async function smokeRun(opts: {
     while (exitCode === null && Date.now() < until && !PRINTED_PORT.test(output)) await wait(250);
     if (exitCode === null && PRINTED_PORT.test(output)) await wait(300);
     if (exitCode !== null) {
-      return exitCode === 0 ? result(true, 'ran and finished (exit 0)') : result(false, `crashed (exit ${exitCode})`);
+      if (exitCode !== 0) return result(false, `crashed (exit ${exitCode})`);
+      return opts.server
+        ? result(false, 'exited at once (exit 0) instead of staying up to answer requests: nothing calls listen')
+        : result(true, 'ran and finished (exit 0)');
     }
     const printed = PRINTED_PORT.exec(output);
     const target = Number(printed?.[1] ?? printed?.[2] ?? port);
@@ -100,6 +105,12 @@ export async function smokeRun(opts: {
       // nothing listening may just be an app that isn't a server, or uses another port.
       if ((err as Error).name === 'TimeoutError') {
         return result(false, `started, but GET / got no answer in ${PROBE_TIMEOUT_MS / 1000} s`);
+      }
+      if (opts.server) {
+        return result(
+          false,
+          `kept running, but nothing answered on port ${target}: listen on process.env.PORT (${port} here) or print the port`,
+        );
       }
       answer = 'nothing answered on a port';
     }

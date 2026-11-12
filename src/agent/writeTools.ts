@@ -22,7 +22,7 @@ export interface WritableWorkspace extends Workspace {
   /** Errors VS Code's language support reports in a file; `wait` lets it re-check after a change first. */
   problems?(path: string, wait: boolean): Promise<Problem[]>;
   /** Starts the app for a few seconds to see it runs (src/agent/smoke.ts). */
-  smokeRun?(command: string, signal: AbortSignal): Promise<SmokeResult>;
+  smokeRun?(command: string, signal: AbortSignal, server: boolean): Promise<SmokeResult>;
   /** Runs a command line in the folder's root with the user's shell. */
   runCommand(command: string, signal: AbortSignal): Promise<CommandResult>;
 }
@@ -236,6 +236,11 @@ export async function prepareWrite(
       if (!command) return { error: 'Error: command is empty.' };
       if (HIDDEN_CHARS.test(command)) {
         return { error: 'Error: the command has hidden or control characters. Send it as plain text.' };
+      }
+      // A command runs until it ends, so a server sent to the background is stopped with
+      // it and can't be reached: the run check starts the app when the task is done.
+      if (BACKGROUND.test(command)) {
+        return { error: `Error: ${NO_SERVER_BY_COMMAND}` };
       }
       // Looking at files is what read_file, list_files and search are for: no approval, no step wasted.
       if (READS_FILES.test(command) && !OUTSIDE_LISTING.test(command)) {
@@ -684,6 +689,13 @@ export function makeDiff(path: string, before: string | undefined, after: string
   ];
   return lines.join('\n');
 }
+
+/** A command sent to the background: a lone `&` at the end, or nohup / setsid / disown. */
+const BACKGROUND = /(^|[^&])&\s*$|\b(nohup|setsid|disown)\b/;
+
+/** Why the agent shouldn't start the app itself. */
+export const NO_SERVER_BY_COMMAND =
+  "don't start the app or a server yourself: run_command waits for a command to end and stops it after 120 seconds, so a server started that way can't be reached. Finish your changes and say you're done: if the project has a start script, the app is then started for you, asked for /, and you're told what happened.";
 
 /** A command that only reads or lists files, with no pipe, redirect or chaining. */
 const READS_FILES = /^\s*(cat|head|tail|less|more|ls|find|grep|rg|wc)\b[^|;&<>`$]*$/;

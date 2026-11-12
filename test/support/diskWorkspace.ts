@@ -123,8 +123,16 @@ export class DiskWorkspace implements WritableWorkspace {
     return [{ line, message }];
   }
 
-  smokeRun(command: string, signal: AbortSignal): Promise<SmokeResult> {
-    return smokeRun({ cwd: this.root, command, shell: '/bin/sh', env: commandEnv(process.env), signal, runMs: 3_000 });
+  smokeRun(command: string, signal: AbortSignal, server: boolean): Promise<SmokeResult> {
+    return smokeRun({
+      cwd: this.root,
+      command,
+      shell: '/bin/sh',
+      env: commandEnv(process.env),
+      signal,
+      runMs: 3_000,
+      server,
+    });
   }
 
   runCommand(command: string, signal: AbortSignal): Promise<CommandResult> {

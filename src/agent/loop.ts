@@ -3,7 +3,7 @@ import type { AgentStep, ModelInfo, ReasoningEffort } from '../shared/protocol';
 import type { Checkpoint } from './checkpoint';
 import { describeProblems, newProblems, type Problem } from './instructions';
 import { needsApproval } from './policy';
-import { COMMAND_NOT_FOUND, MAX_VERIFY_ROUNDS, syntaxCheckCommand } from './verify';
+import { COMMAND_NOT_FOUND, MAX_VERIFY_ROUNDS, startsApp, syntaxCheckCommand } from './verify';
 import {
   applyWrite,
   COMMAND_TIMEOUT_MS,
@@ -11,6 +11,7 @@ import {
   isWriteTool,
   keepEnds,
   MAX_COMMAND_OUTPUT_CHARS,
+  NO_SERVER_BY_COMMAND,
   prepareWrite,
   WRITE_TOOLS,
   type PendingWrite,
@@ -136,6 +137,8 @@ export interface AgentDeps {
   checkCommand?: string;
   /** How to start the app (`npm start`), run for a few seconds when it's done to see it works. */
   startCommand?: string;
+  /** The app is a server: when started it must stay up and answer `/`. */
+  startServes?: boolean;
   maxSteps?: number;
 }
 
@@ -478,7 +481,7 @@ async function verifyWork(
         step({ title: `Skipped starting the app with \`${deps.startCommand}\` (rejected)`, outcome: 'rejected' });
     }
     if (start.allowed) {
-      const run = await smoke(deps.startCommand, deps.signal);
+      const run = await smoke(deps.startCommand, deps.signal, deps.startServes ?? false);
       if (deps.signal.aborted) throw abortError();
       step({
         title: `Started the app with \`${deps.startCommand}\`: ${run.summary}`,
@@ -499,7 +502,10 @@ async function runWrite(
   baseline: Map<string, Problem[]>,
   progress: { changes: number; commands: number },
 ): Promise<string> {
-  const prepared = await prepareWrite(deps.workspace, call);
+  const prepared =
+    deps.startCommand && call.function.name === 'run_command' && startsApp(commandOf(call))
+      ? { error: `Error: ${NO_SERVER_BY_COMMAND}` }
+      : await prepareWrite(deps.workspace, call);
   if ('error' in prepared) {
     const where = pathOf(call);
     step({
@@ -584,4 +590,14 @@ function abortError(): Error {
   const err = new Error('Stopped.');
   err.name = 'AbortError';
   return err;
+}
+
+/** The command line of a run_command call, or "" if its arguments don't parse. */
+function commandOf(call: ToolCall): string {
+  try {
+    const { command } = JSON.parse(call.function.arguments || '{}') as { command?: unknown };
+    return typeof command === 'string' ? command : '';
+  } catch {
+    return '';
+  }
 }

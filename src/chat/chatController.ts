@@ -1,5 +1,5 @@
 import { Instructions } from '../agent/instructions';
-import { detectCheckCommand, detectStartCommand } from '../agent/verify';
+import { detectCheckCommand, detectStartCommand, expectsServer } from '../agent/verify';
 import { Checkpoint } from '../agent/checkpoint';
 import { FIND_SYMBOL_TOOL, runFindSymbol } from '../agent/findSymbol';
 import { runAgent, type AgentModel } from '../agent/loop';
@@ -156,16 +156,18 @@ export function instructionBudget(maxPromptChars = MAX_PROMPT_CHARS): number {
 /** The project's check command and how to start the app, found from its files. */
 async function findCheckCommand(
   ws: WritableWorkspace,
-): Promise<{ checkCommand: string | undefined; startCommand: string | undefined }> {
+  task: string,
+): Promise<{ checkCommand: string | undefined; startCommand: string | undefined; startServes: boolean }> {
   try {
     const files = await ws.listFiles();
     const packageJson = files.includes('package.json') ? await ws.readFile('package.json') : undefined;
     return {
       checkCommand: detectCheckCommand(files, packageJson),
       startCommand: detectStartCommand(files, packageJson),
+      startServes: expectsServer(task, packageJson),
     };
   } catch {
-    return { checkCommand: undefined, startCommand: undefined };
+    return { checkCommand: undefined, startCommand: undefined, startServes: false };
   }
 }
 
@@ -530,9 +532,10 @@ export class ChatController {
     const findSymbol = this.deps.findSymbol;
     // The repository's instruction files and its check run on their own, nothing to set up.
     const instructions = new Instructions(ws, instructionBudget(model.info.maxPromptChars));
-    const [rootInstructions, { checkCommand, startCommand }] = await Promise.all([
+    const task = [...history].reverse().find((m) => m.role === 'user')?.content ?? '';
+    const [rootInstructions, { checkCommand, startCommand, startServes }] = await Promise.all([
       instructions.root(),
-      findCheckCommand(ws),
+      findCheckCommand(ws, task),
     ]);
     const wire: WireMessage[] = [
       { role: 'system', content: await buildSystemPrompt(ws, true, true, rootInstructions) },
@@ -564,6 +567,7 @@ export class ChatController {
       problems: ws.problems?.bind(ws),
       checkCommand,
       startCommand,
+      startServes,
     });
   }
 

@@ -10,7 +10,7 @@ beforeAll(async () => {
 });
 afterAll(() => rm(dir, { recursive: true, force: true }));
 
-async function run(source: string) {
+async function run(source: string, server = false) {
   await writeFile(path.join(dir, 'app.js'), source);
   return smokeRun({
     cwd: dir,
@@ -19,6 +19,7 @@ async function run(source: string) {
     env: process.env,
     signal: new AbortController().signal,
     runMs: 2_000,
+    server,
   });
 }
 
@@ -33,6 +34,22 @@ describe('smokeRun', () => {
 
   it('passes a script that finishes cleanly', async () => {
     expect(await run("console.log('done')")).toMatchObject({ ok: true, summary: 'ran and finished (exit 0)' });
+  });
+
+  it('fails a server that exits at once without listening', async () => {
+    const r = await run("const http = require('http'); const server = http.createServer(() => {});", true);
+    expect(r.ok).toBe(false);
+    expect(r.summary).toMatch(/^exited at once \(exit 0\) instead of staying up/);
+  });
+
+  it("fails a server that keeps running but doesn't answer on its port", async () => {
+    const r = await run('setInterval(() => {}, 1000)', true);
+    expect(r.ok).toBe(false);
+    expect(r.summary).toMatch(/^kept running, but nothing answered on port \d+: listen on process\.env\.PORT/);
+  });
+
+  it('passes a server that answers when one is expected', async () => {
+    expect(await run(server("res.end('hi')"), true)).toMatchObject({ ok: true });
   });
 
   it('fails a crash on start, with its output', async () => {
