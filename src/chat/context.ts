@@ -24,6 +24,7 @@ const AGENT_RULES = [
   "- Follow the repository's instructions (AGENTS.md, CLAUDE.md and the like), shown below and with files from folders that have their own; they decide conventions, style and checks.",
   '- After each change, its result lists any errors it added; fix them before going on.',
   "- When you say you're done, the changed files are checked for errors and the project's check is run; the task must end with working code.",
+  '- Only say a file changed if edit_file or create_file reported it. Describing a fix in your reply does not change any file.',
   '- If the user rejects a change, do not repeat it; ask or try another way.',
   '- Work step by step and stop when the task is done. Then say in a few lines which files you changed and what is left.',
 ];

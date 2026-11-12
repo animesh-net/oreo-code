@@ -52,6 +52,19 @@ export function announcesAction(text: string): boolean {
   );
 }
 
+const NOT_CHANGED =
+  'You wrote that you changed files, but no file has been changed in this task: describing a fix does not make it. Make the changes now with edit_file or create_file, then say what you changed.';
+
+/**
+ * True when a reply says files were changed ("Files changed:", "I fixed…", "I've updated…").
+ * Checked only when the task changed nothing, so a claim there is a mistake.
+ */
+export function claimsChanges(text: string): boolean {
+  return /\b(files? (changed|modified|updated)|changes? (made|applied)|i('ve| have)? (now )?(fixed|updated|changed|modified|edited|rewritten|rewrote|removed|added|created|replaced|refactored)|(has|have) been (fixed|updated|changed|modified|rewritten|removed|added|created))\b/i.test(
+    text,
+  );
+}
+
 export interface AgentModel {
   client: ModelClient;
   info: ModelInfo;
@@ -125,6 +138,8 @@ export async function runAgent(deps: AgentDeps): Promise<AgentResult> {
   const baseline = new Map<string, Problem[]>();
   let verifyRounds = 0;
   let nudges = 0;
+  /** The last reply claimed changes, but the task changed no file. */
+  let unchangedClaim = false;
   let unresolved: string | undefined;
   /** Files changed so far, and how many had changed at the last check. */
   const progress = { changes: 0 };
@@ -182,6 +197,16 @@ export async function runAgent(deps: AgentDeps): Promise<AgentResult> {
         deps.wire.push({ role: 'assistant', content: text });
         deps.wire.push({ role: 'user', content: GO_ON });
         continue;
+      }
+      // Or it says it changed files when this task changed none: the change never happened.
+      if (deps.checkpoint.isEmpty && claimsChanges(text)) {
+        if (offered && nudges < MAX_NUDGES) {
+          nudges++;
+          deps.wire.push({ role: 'assistant', content: text });
+          deps.wire.push({ role: 'user', content: NOT_CHANGED });
+          continue;
+        }
+        unchangedClaim = true;
       }
       // Done, says the model. A task that changed files ends only with working code:
       // no new errors and a passing project check, or the failure goes back to fix.
@@ -264,6 +289,11 @@ export async function runAgent(deps: AgentDeps): Promise<AgentResult> {
       // The work is done; a failed summary only loses the summary, unless you pressed Stop.
       if (deps.signal.aborted) throw err;
     }
+  }
+  if (unchangedClaim && deps.checkpoint.isEmpty) {
+    const note = '\n\nNote: no file was changed in this task, whatever the reply above says.';
+    reply += note;
+    deps.onText(note);
   }
   if (unresolved) {
     const note = `\n\nThe checks still fail, so this isn't working yet:\n\n${unresolved}`;
