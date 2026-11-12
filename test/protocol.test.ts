@@ -21,10 +21,16 @@ describe('Thinking menu', () => {
 
   it('gives every Oreo model a thinking style', () => {
     expect(OREO_MODELS.map((m) => [m.id, m.thinking])).toEqual([
+      ['@cf/openai/gpt-oss-120b', 'levels'],
+      ['@cf/qwen/qwen3-30b-a3b-fp8', 'switch'],
       ['oreo-4b', 'switch'],
       ['oreo-2b', 'switch'],
-      ['@cf/qwen/qwen3-30b-a3b-fp8', 'switch'],
-      ['@cf/openai/gpt-oss-120b', 'levels'],
+      ['oreo-1.5b', 'none'],
     ]);
+  });
+
+  it('offers no Thinking choices for a model that cannot think', () => {
+    expect(effortChoices('none', 'high')).toEqual([]);
+    expect(effortLabel('none', 'high')).toBe('No thinking');
   });
 });

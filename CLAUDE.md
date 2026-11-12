@@ -149,7 +149,13 @@ stdio (now), then an agent loop with approval cards, and local workspace tools.
 - **Models are named once** in `src/ollama/models.ts` (`OREO_MODELS`); no model id
   anywhere else and no model editing. Display names are `Oreo <size>` (`Oreo 4B`, `Oreo 120B`); a Mac model's id is `oreo-<size>`. Ollama's `GET /api/tags` only marks which
   are installed. The extension only offers a dropdown; agent mode uses only
-  models with `supportsTools: true`.
+  models with `supportsTools: true`. A model without `defaultRank` is never picked
+  for you, and one with `thinking: 'none'` gets no Thinking menu and no
+  `reasoning_effort`.
+- **Models stay in sync with oreo-ai** ([animesh-net/oreo-ai](https://github.com/animesh-net/oreo-ai),
+  `src/OreoAi.Web/Models/OreoModels.cs`): same ids, labels and order — largest
+  first. Any model added, removed or renamed here must be changed there in the same
+  way, and the other way round.
 - **Testable core.** `src/chat/`, `src/ollama/`, `src/cloudflare/`, `src/mcp/`, `src/agent/` and `src/update/` have no `vscode` imports; VS
   Code wiring goes in `src/extension.ts`, `src/views/`, `src/auth/` and `src/workspace/`.
 - **Agent safety lives in code.** Only the write tools in `ALLOWED_WRITES`

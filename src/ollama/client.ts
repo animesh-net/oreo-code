@@ -1,7 +1,7 @@
 import OpenAI from 'openai';
 import type { ModelInfo, ReasoningEffort } from '../shared/protocol';
 import { OllamaHttpError } from './errors';
-import { modelsFromTags } from './models';
+import { modelsFromTags, thinkingOf } from './models';
 
 /** A message as sent to Ollama, including the system prompt and tool turns. */
 export type WireMessage =
@@ -86,16 +86,18 @@ export class OllamaClient implements ModelClient {
     tools?: FunctionTool[],
   ): AsyncIterable<StreamEvent> {
     // Ollama's /v1 honours reasoning_effort: "none" turns thinking off, and on a model
-    // that can only think or not (qwen3.5) any level turns it on.
+    // that can only think or not (qwen3.5) any level turns it on. A model that can't
+    // think gets none at all.
+    const thinks = thinkingOf(model) !== 'none' && effort !== 'none';
     const stream = await this.openai.chat.completions.create(
       {
         model,
         messages: messages as OpenAI.Chat.ChatCompletionMessageParam[],
         stream: true,
-        reasoning_effort: effort,
+        ...(thinkingOf(model) === 'none' ? {} : { reasoning_effort: effort }),
         // Without a cap a small model can run on until the context is full, and once
         // Ollama shifts the context it loses its place and repeats itself.
-        max_tokens: effort === 'none' ? MAX_OUTPUT_TOKENS : MAX_OUTPUT_TOKENS * 2,
+        max_tokens: thinks ? MAX_OUTPUT_TOKENS * 2 : MAX_OUTPUT_TOKENS,
         ...(tools?.length ? { tools } : {}),
       },
       { signal },

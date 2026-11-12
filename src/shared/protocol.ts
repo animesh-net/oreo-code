@@ -7,9 +7,10 @@ export type ModelProvider = 'macbook' | 'cloudflare';
 /**
  * How a model can think. "switch": only on or off (Off / On in the menu); Ollama
  * turns any level into "on" for such a model. "levels": always reasons, at low,
- * medium or high. Set per model in `src/ollama/models.ts`.
+ * medium or high. "none": can't think, so there is no Thinking menu and no
+ * reasoning_effort is sent. Set per model in `src/ollama/models.ts`.
  */
-export type ThinkingStyle = 'switch' | 'levels';
+export type ThinkingStyle = 'switch' | 'levels' | 'none';
 
 export interface ModelInfo {
   id: string;
@@ -19,6 +20,8 @@ export interface ModelInfo {
   thinking: ThinkingStyle;
   /** The prompt is kept under this many characters, to fit the model's context window. */
   maxPromptChars: number;
+  /** Lower is picked first when no model is chosen; without one, only picked by hand. */
+  defaultRank?: number;
   /** False when Ollama doesn't have the model installed. */
   available: boolean;
 }
@@ -40,6 +43,7 @@ export function effortChoices(
   style: ThinkingStyle,
   effort: ReasoningEffort,
 ): { value: ReasoningEffort; label: string }[] {
+  if (style === 'none') return [];
   return style === 'levels'
     ? [
         { value: 'low', label: 'Low' },
@@ -58,6 +62,7 @@ export function shownEffort(style: ThinkingStyle, effort: ReasoningEffort): Reas
 
 /** The pill's second word: the level, or whether a switch model thinks. */
 export function effortLabel(style: ThinkingStyle, effort: ReasoningEffort): string {
+  if (style === 'none') return 'No thinking';
   if (style === 'switch') return effort === 'none' ? 'Thinking off' : 'Thinking';
   const shown = shownEffort(style, effort);
   return effortChoices(style, effort).find((c) => c.value === shown)?.label ?? shown;

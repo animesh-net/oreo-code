@@ -143,7 +143,8 @@ function App() {
             </button>
             {menuOpen && (
               <div class="menu" role="menu">
-                {(['macbook', 'cloudflare'] as const).map((provider) => {
+                {/* Groups in the order their first model comes in the list, largest first. */}
+                {[...new Set(state.models.map((m) => m.provider))].map((provider) => {
                   const group = state.models.filter((m) => m.provider === provider);
                   if (!group.length) return null;
                   return (
@@ -168,7 +169,7 @@ function App() {
                     </Fragment>
                   );
                 })}
-                {model && (
+                {model && model.thinking !== 'none' && (
                   <>
                     <p class="menu-heading">Thinking</p>
                     <div class="effort" role="group" aria-label="Thinking">

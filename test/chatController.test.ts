@@ -24,6 +24,7 @@ const models: ModelInfo[] = [
     supportsTools: true,
     thinking: 'switch',
     maxPromptChars: 72_000,
+    defaultRank: 1,
     available: true,
   },
   {
@@ -33,6 +34,7 @@ const models: ModelInfo[] = [
     supportsTools: false,
     thinking: 'switch',
     maxPromptChars: 72_000,
+    defaultRank: 2,
     available: true,
   },
   {
@@ -42,6 +44,7 @@ const models: ModelInfo[] = [
     supportsTools: false,
     thinking: 'switch',
     maxPromptChars: 72_000,
+    defaultRank: 3,
     available: false,
   },
 ];
@@ -179,13 +182,14 @@ describe('ChatController', () => {
     );
     await controller.refresh();
     expect(controller.state.selectedModel).toBe('oreo-2b');
-    // The three from Ollama, then the two Workers AI models (unusable without a token).
+    // Largest first as in OREO_MODELS: the two Workers AI models (unusable without a
+    // token), then the Mac's; one not in OREO_MODELS goes last.
     expect(controller.state.models.map((m) => [m.id, m.available])).toEqual([
+      ['@cf/openai/gpt-oss-120b', false],
+      ['@cf/qwen/qwen3-30b-a3b-fp8', false],
       ['oreo-4b', true],
       ['oreo-2b', true],
       ['oreo-9b', false],
-      ['@cf/qwen/qwen3-30b-a3b-fp8', false],
-      ['@cf/openai/gpt-oss-120b', false],
     ]);
   });
 
@@ -368,6 +372,18 @@ describe('pickModel', () => {
     expect(pickModel(models, 'gone', 'oreo-2b')).toBe('oreo-2b');
     expect(pickModel(models, undefined, 'missing')).toBe('oreo-4b');
     expect(pickModel([], undefined, undefined)).toBeUndefined();
+  });
+
+  it('never picks a model without a rank for you, but keeps one you chose', () => {
+    const coder: ModelInfo = { ...models[1], id: 'oreo-1.5b', name: 'Oreo 1.5B', thinking: 'none' };
+    delete coder.defaultRank;
+    const ranked = [{ ...models[0], available: false }, coder, { ...models[1], available: false }];
+    expect(pickModel(ranked, undefined, undefined)).toBeUndefined();
+    expect(pickModel(ranked, undefined, 'oreo-1.5b')).toBe('oreo-1.5b');
+  });
+
+  it('picks by rank, not by where a model sits in the list', () => {
+    expect(pickModel([models[1], models[0]], undefined, undefined)).toBe('oreo-4b');
   });
 
   it('skips models Ollama does not have', () => {
@@ -612,8 +628,8 @@ describe('Cloudflare models', () => {
     await controller.refresh();
     const cloud = controller.state.models.filter((m) => m.provider === 'cloudflare');
     expect(cloud.map((m) => [m.id, m.available])).toEqual([
-      [QWEN, false],
       [GPT, true],
+      [QWEN, false],
     ]);
   });
 

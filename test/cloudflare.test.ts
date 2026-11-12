@@ -101,16 +101,16 @@ describe('CloudflareClient.listModels', () => {
     const models = await c.listModels();
     expect(urls).toEqual([`${RELAY}/models`]);
     expect(models.map((m) => [m.id, m.provider, m.available])).toEqual([
-      [QWEN, 'cloudflare', true],
       [GPT, 'cloudflare', true],
+      [QWEN, 'cloudflare', true],
     ]);
   });
 
   it('marks a model the relay leaves out unavailable, and ignores ids it does not know', async () => {
     const { c } = client(() => json(200, { object: 'list', data: [{ id: GPT }, { id: '@cf/other/model' }] }));
     expect((await c.listModels()).map((m) => [m.id, m.available])).toEqual([
-      [QWEN, false],
       [GPT, true],
+      [QWEN, false],
     ]);
   });
 
