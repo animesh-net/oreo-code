@@ -30,6 +30,28 @@ export const MALFORMED_TWICE =
   "The model sent tool calls it couldn't make twice in a row, so the task stopped. Try again, or pick a larger model.";
 const REJECTED = 'The user rejected this. Do not try it again; ask what they want instead, or take another approach.';
 
+/** How many times a task may be told to carry out what it announced. */
+export const MAX_NUDGES = 3;
+const GO_ON =
+  "You said what you'll do but didn't do it. Do it now with the tools (edit_file, create_file, run_command). When the whole task is done, say so in a few lines.";
+
+/**
+ * True when a reply ends by announcing a next step rather than finishing: "I'll…",
+ * "Let me…", "Next, I…", or a closing colon. A question to the user is an answer.
+ */
+export function announcesAction(text: string): boolean {
+  const end = text.trim().slice(-400);
+  if (!end || end.endsWith('?')) return false;
+  if (end.endsWith(':')) return true;
+  const last = end
+    .split(/(?<=[.!])\s+/)
+    .slice(-2)
+    .join(' ');
+  return /\b(i'?ll|i will|let me|let's|i'?m going to|i am going to|next,? i|now i'?ll|i'?ll now|i need to|i should now)\b/i.test(
+    last,
+  );
+}
+
 export interface AgentModel {
   client: ModelClient;
   info: ModelInfo;
@@ -102,6 +124,7 @@ export async function runAgent(deps: AgentDeps): Promise<AgentResult> {
   /** Each changed file's errors before the task touched it. */
   const baseline = new Map<string, Problem[]>();
   let verifyRounds = 0;
+  let nudges = 0;
   let unresolved: string | undefined;
   /** Files changed so far, and how many had changed at the last check. */
   const progress = { changes: 0 };
@@ -152,6 +175,14 @@ export async function runAgent(deps: AgentDeps): Promise<AgentResult> {
     // The last round offers no tools; a call the model makes anyway isn't run.
     if (!offered) calls = undefined;
     if (!calls?.length) {
+      // Small models often say what they'll do next ("I'll remove the duplicate…") and
+      // stop without calling a tool. That isn't an answer: tell it to go on.
+      if (offered && nudges < MAX_NUDGES && announcesAction(text)) {
+        nudges++;
+        deps.wire.push({ role: 'assistant', content: text });
+        deps.wire.push({ role: 'user', content: GO_ON });
+        continue;
+      }
       // Done, says the model. A task that changed files ends only with working code:
       // no new errors and a passing project check, or the failure goes back to fix.
       if (deps.checkpoint.isEmpty) break;

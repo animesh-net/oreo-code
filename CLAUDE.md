@@ -198,7 +198,8 @@ commit, pull request) through the local `github-mcp-server` over stdio.
   Commands run with `commandEnv`: your environment without VS Code's `ELECTRON_RUN_AS_NODE` and `VSCODE_*`. `fitToContext`
   counts tool-call arguments and trims those of calls already made. A tool that fails goes back to the model as an error; the task goes on. Calls get unique ids, unparseable
   arguments are replaced with `{}` in the conversation, and the last round (no tools offered) runs no calls.
-  `MAX_AGENT_STEPS` is the only step limit.
+  A reply that only announces a next step (`announcesAction`) is not an answer: the model
+  is told to do it, up to `MAX_NUDGES` times. `MAX_AGENT_STEPS` is the only step limit.
 - **Agent mode ends with working code, on its own.** The root `AGENTS.md`, `CLAUDE.md`
   and `.github/copilot-instructions.md` go in the agent's system prompt, and a folder's
   own `AGENTS.md`/`CLAUDE.md` with the first file read or changed there (`Instructions`,

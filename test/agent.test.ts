@@ -4,7 +4,15 @@ import { Checkpoint } from '../src/agent/checkpoint';
 import { describeProblems, Instructions, newProblems, type Problem } from '../src/agent/instructions';
 import { detectCheckCommand } from '../src/agent/verify';
 import { FIND_SYMBOL_TOOL, runFindSymbol } from '../src/agent/findSymbol';
-import { MALFORMED_TWICE, MAX_AGENT_STEPS, malformedProblem, runAgent, type AgentDeps } from '../src/agent/loop';
+import {
+  announcesAction,
+  MALFORMED_TWICE,
+  MAX_AGENT_STEPS,
+  MAX_NUDGES,
+  malformedProblem,
+  runAgent,
+  type AgentDeps,
+} from '../src/agent/loop';
 import { needsApproval } from '../src/agent/policy';
 import {
   applyWrite,
@@ -933,5 +941,39 @@ describe('repository instructions and checks', () => {
     const client = scripted([[call('read_file', { path: 'src/a.ts' })], 'Read it.']);
     await runAgent(deps(client, ws, { instructionsFor: (p) => ins.forPath(p) }));
     expect(client.calls[1].wire.at(-1)?.content).toMatch(/follow them:\n--- src\/AGENTS\.md ---\nPrefer async\./);
+  });
+});
+
+describe('announced but not done', () => {
+  it('knows a reply that announces a step from one that finishes', () => {
+    expect(
+      announcesAction("I found two createServer calls. I'll remove the duplicated createServer call at line 16."),
+    ).toBe(true);
+    expect(announcesAction("I'll create clean working versions of both server files:")).toBe(true);
+    expect(announcesAction('Let me fix the import next.')).toBe(true);
+    expect(announcesAction('I removed the duplicate call; the server starts on port 8080.')).toBe(false);
+    expect(announcesAction('Should I also rename the helper?')).toBe(false);
+    expect(announcesAction('')).toBe(false);
+  });
+
+  it('tells the model to carry out what it announced, then finishes', async () => {
+    const ws = memoryWorkspace({ 'server/start.js': 'a\na\n' });
+    const client = scripted([
+      [call('read_file', { path: 'server/start.js' })],
+      "I'll remove the duplicated line.",
+      [call('edit_file', { path: 'server/start.js', old_text: 'a\na\n', new_text: 'a\n' }, 'c2')],
+      'Removed the duplicate.',
+    ]);
+    const result = await runAgent(deps(client, ws, { approveEdits: () => true }));
+    expect(ws.files['server/start.js']).toBe('a\n');
+    expect(client.calls[2].wire.at(-1)?.content).toMatch(/didn't do it/);
+    expect(result.reply).toMatch(/Removed the duplicate\.$/);
+  });
+
+  it('stops nudging after a few tries', async () => {
+    const ws = memoryWorkspace({});
+    const client = scripted(["I'll do it."]);
+    await runAgent(deps(client, ws));
+    expect(client.calls).toHaveLength(1 + MAX_NUDGES);
   });
 });
