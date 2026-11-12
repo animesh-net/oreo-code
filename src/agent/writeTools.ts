@@ -154,6 +154,13 @@ export async function prepareWrite(
       if (HIDDEN_CHARS.test(command)) {
         return { error: 'Error: the command has hidden or control characters. Send it as plain text.' };
       }
+      // Looking at files is what read_file, list_files and search are for: no approval, no step wasted.
+      if (READS_FILES.test(command)) {
+        return {
+          error:
+            'Error: use read_file to read a file, list_files to list them and search to find text; run_command is for building, testing and running.',
+        };
+      }
       return { pending: { kind: 'run_command', command } };
     }
     default:
@@ -513,4 +520,7 @@ export function makeDiff(path: string, before: string | undefined, after: string
  * Characters that can make a command look different from what runs: control
  * characters (other than tab and newline) and Unicode bidirectional overrides.
  */
+/** A command that only reads or lists files, with no pipe, redirect or chaining. */
+const READS_FILES = /^\s*(cat|head|tail|less|more|ls|find|grep|rg|wc)\b[^|;&<>`$]*$/;
+
 const HIDDEN_CHARS = /[\u0000-\u0008\u000b-\u001f\u007f\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/;

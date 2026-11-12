@@ -40,3 +40,21 @@ export function detectCheckCommand(files: readonly string[], packageJson: string
   if (root.has('go.mod')) return 'go build ./...';
   return undefined;
 }
+
+/** Quotes a path for the shell: paths are checked by writePathProblem, but quoting keeps it plain. */
+const quote = (path: string) => `'${path.replace(/'/g, "'\\''")}'`;
+
+/**
+ * A syntax check for changed files when the project has no check of its own: it parses
+ * them without running them (`node --check`, Python's ast.parse), so it needs no approval.
+ */
+export function syntaxCheckCommand(changed: readonly string[]): string | undefined {
+  const parts: string[] = [];
+  for (const path of changed) {
+    if (/\.(js|mjs|cjs)$/i.test(path)) parts.push(`node --check ${quote(path)}`);
+    else if (/\.py$/i.test(path)) {
+      parts.push(`python3 -c 'import ast,sys; ast.parse(open(sys.argv[1]).read(), sys.argv[1])' ${quote(path)}`);
+    }
+  }
+  return parts.length ? parts.join(' && ') : undefined;
+}
