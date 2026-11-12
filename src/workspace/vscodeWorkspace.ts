@@ -1,4 +1,6 @@
 import { spawn } from 'node:child_process';
+import { lstat, realpath } from 'node:fs/promises';
+import * as nodePath from 'node:path';
 import * as vscode from 'vscode';
 import type { ActiveFile } from '../agent/workspaceTools';
 import { COMMAND_TIMEOUT_MS, type CommandResult, type WritableWorkspace } from '../agent/writeTools';
@@ -10,8 +12,10 @@ const MAX_FILES = 5000;
 const MAX_FILE_BYTES = 1_000_000;
 const LIST_TTL_MS = 30_000;
 
-/** Output kept from a command; the model gets less (src/agent/writeTools.ts). */
+/** Output kept from a command, half from its start and half from its end; the model gets less (src/agent/writeTools.ts). */
 const MAX_COMMAND_CAPTURE = 200_000;
+/** How long a stopped command gets to exit before it is killed outright. */
+const KILL_GRACE_MS = 5_000;
 
 /** The first open folder, or undefined when none is open. */
 export function currentWorkspace(): WritableWorkspace | undefined {
@@ -34,12 +38,45 @@ class FolderWorkspace implements WritableWorkspace {
     return vscode.Uri.joinPath(this.folder.uri, ...path.split('/'));
   }
 
+  /** lstat, so a symlink counts as existing even when what it points to doesn't. */
   async exists(path: string): Promise<boolean> {
     try {
-      await vscode.workspace.fs.stat(this.uri(path));
+      await lstat(this.uri(path).fsPath);
       return true;
     } catch {
       return false;
+    }
+  }
+
+  /**
+   * Refuses a write that a symlink would take outside the folder: the file itself
+   * may not be a symlink, and its nearest existing folder must resolve inside the
+   * folder's real path.
+   */
+  private async assertInside(path: string): Promise<void> {
+    const target = this.uri(path).fsPath;
+    const root = await realpath(this.root);
+    let link = false;
+    try {
+      link = (await lstat(target)).isSymbolicLink();
+    } catch {
+      // Doesn't exist yet: a new file.
+    }
+    if (link) throw new Error(`${path} is a symbolic link; agent mode doesn't write through links.`);
+    let dir = nodePath.dirname(target);
+    for (;;) {
+      try {
+        const real = await realpath(dir);
+        if (real !== root && !real.startsWith(root + nodePath.sep)) {
+          throw new Error(`${path} is outside the open folder (through a symbolic link).`);
+        }
+        return;
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+        const parent = nodePath.dirname(dir);
+        if (parent === dir) throw new Error(`${path} is outside the open folder.`);
+        dir = parent;
+      }
     }
   }
 
@@ -49,6 +86,7 @@ class FolderWorkspace implements WritableWorkspace {
    * on disk, creating its folders.
    */
   async writeFile(path: string, text: string): Promise<void> {
+    await this.assertInside(path);
     const uri = this.uri(path);
     const open = vscode.workspace.textDocuments.find((d) => d.uri.toString() === uri.toString());
     if (open) {
@@ -64,6 +102,7 @@ class FolderWorkspace implements WritableWorkspace {
   }
 
   async deleteFile(path: string): Promise<void> {
+    await this.assertInside(path);
     await vscode.workspace.fs.delete(this.uri(path), { useTrash: true });
     cached = undefined;
   }
@@ -83,35 +122,55 @@ class FolderWorkspace implements WritableWorkspace {
         // Its own process group, so Stop and the timeout end the whole command, not just the shell.
         detached: true,
       });
-      let output = '';
+      // The start and a rolling end of the output: failures are usually reported last.
+      let head = '';
+      let tail = '';
+      let dropped = 0;
       let timedOut = false;
+      const half = MAX_COMMAND_CAPTURE / 2;
       const add = (chunk: Buffer) => {
-        if (output.length < MAX_COMMAND_CAPTURE) output += chunk.toString('utf8');
+        const text = chunk.toString('utf8');
+        const room = half - head.length;
+        if (room > 0) head += text.slice(0, room);
+        tail += text.slice(Math.max(0, room));
+        if (tail.length > half) {
+          dropped += tail.length - half;
+          tail = tail.slice(-half);
+        }
       };
       child.stdout.on('data', add);
       child.stderr.on('data', add);
-      const kill = () => {
+      const signalGroup = (sig: NodeJS.Signals) => {
         try {
-          if (child.pid) process.kill(-child.pid, 'SIGTERM');
+          if (child.pid) process.kill(-child.pid, sig);
         } catch {
-          child.kill('SIGTERM');
+          child.kill(sig);
         }
+      };
+      // SIGTERM first; a command that ignores it is killed outright after a grace period.
+      let forceTimer: NodeJS.Timeout | undefined;
+      const kill = () => {
+        signalGroup('SIGTERM');
+        forceTimer ??= setTimeout(() => signalGroup('SIGKILL'), KILL_GRACE_MS);
       };
       const timer = setTimeout(() => {
         timedOut = true;
         kill();
       }, COMMAND_TIMEOUT_MS);
       signal.addEventListener('abort', kill, { once: true });
-      const done = (exitCode: number | undefined) => {
+      if (signal.aborted) kill();
+      let finished = false;
+      const done = (exitCode: number | undefined, extra = '') => {
+        if (finished) return;
+        finished = true;
         clearTimeout(timer);
+        if (forceTimer) clearTimeout(forceTimer);
         signal.removeEventListener('abort', kill);
         cached = undefined;
+        const output = head + (dropped ? `\n… (${dropped} characters cut) …\n` : '') + tail + extra;
         resolve({ exitCode, output, timedOut });
       };
-      child.on('error', (err) => {
-        output += err.message;
-        done(undefined);
-      });
+      child.on('error', (err) => done(undefined, err.message));
       child.on('close', (code) => done(code ?? undefined));
     });
   }

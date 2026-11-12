@@ -321,9 +321,9 @@ export class ChatController {
 
   private async send(rawText: string): Promise<void> {
     const text = rawText.trim();
-    const model = this.selectedModel;
+    let model = this.selectedModel;
     const info = this.models.find((m) => m.id === model);
-    const inCloud = info?.provider === 'cloudflare';
+    let inCloud = info?.provider === 'cloudflare';
     const client = inCloud ? this.cloud : this.client;
     if (!text || this.busy || !client || !model) return;
 
@@ -356,6 +356,11 @@ export class ChatController {
           onStep: (step) => {
             steps.push(step);
             this.deps.post({ type: 'step', step });
+          },
+          // After a move to the Mac, a failure is worded for the Mac model, not Cloudflare.
+          onMove: (moved) => {
+            model = moved.id;
+            inCloud = false;
           },
         });
         reply = result.reply;
@@ -449,7 +454,7 @@ export class ChatController {
     model: AgentModel,
     history: ChatMessage[],
     signal: AbortSignal,
-    on: { onText(delta: string): void; onStep(step: AgentStep): void },
+    on: { onText(delta: string): void; onStep(step: AgentStep): void; onMove(model: ModelInfo): void },
   ) {
     const checkpoint = new Checkpoint();
     this.checkpoint = checkpoint;
@@ -479,6 +484,7 @@ export class ChatController {
       onText: on.onText,
       onThinking: () => this.deps.post({ type: 'thinking' }),
       onStep: on.onStep,
+      onMove: on.onMove,
     });
   }
 
@@ -524,14 +530,13 @@ export class ChatController {
     const checkpoint = this.checkpoint;
     const ws = this.deps.getWritableWorkspace?.();
     if (this.busy || !checkpoint || checkpoint.isEmpty || !ws) return;
-    const files = checkpoint.files;
-    const failed = await checkpoint.restore(ws);
+    const { restored, changed, failed } = await checkpoint.restore(ws);
     this.checkpoint = undefined;
-    const restored = files.filter((f) => !failed.includes(f));
     this.messages.push({
       role: 'assistant',
       content:
         `Undid the last task: put back ${restored.length} file${restored.length === 1 ? '' : 's'} (${restored.join(', ') || 'none'}).` +
+        (changed.length ? ` Left ${changed.join(', ')} as is: changed since the task wrote it.` : '') +
         (failed.length ? ` Couldn't restore ${failed.join(', ')}.` : '') +
         ' Commands it ran are not undone.',
     });

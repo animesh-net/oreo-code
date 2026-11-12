@@ -180,10 +180,12 @@ commit, pull request) through the local `github-mcp-server` over stdio.
   every write tool through `needsApproval` (`src/agent/policy.ts`): `run_command`
   always asks; `edit_file` and `create_file` ask unless "Approve edits for this task"
   is on, which resets when the task ends. A rejection goes back to the model; Stop
-  counts as one. `writePathProblem` refuses absolute paths, `.`/`..`, `.git/` and
-  secret files; an edit's `old_text` must match exactly once, checked again when
+  counts as one. `writePathProblem` refuses absolute paths, `.`/`..`, `.git` at any depth
+  and secret files, in any letter case; the workspace refuses writes through symbolic
+  links or outside the folder's real path; an edit's `old_text` must match exactly once, checked again when
   applied. Every file is remembered in the task's `Checkpoint` before it changes, so
-  "Undo task" can restore it. `MAX_AGENT_STEPS` is the only step limit. Agent mode is
+  "Undo task" can restore it; undo leaves a file alone if it changed after the task
+  wrote it. `MAX_AGENT_STEPS` is the only step limit. Agent mode is
   offered only for models with `supportsTools: true`; `find_symbol` reads the one
   symbol index completion keeps, never a second one.
 - **Workspace tools only read.** `src/agent/workspaceTools.ts` reads only files in the

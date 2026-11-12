@@ -1,5 +1,4 @@
 import type { FunctionTool, ToolCall } from '../ollama/client';
-import { capResult } from './policy';
 import { isSecretPath, type Workspace } from './workspaceTools';
 
 /**
@@ -148,6 +147,8 @@ export interface BeforeWrite {
   path: string;
   /** The file's text before the task touched it; undefined if the task creates it. */
   before: string | undefined;
+  /** The text the task is about to leave in it. */
+  after: string;
 }
 
 /**
@@ -166,13 +167,13 @@ export async function applyWrite(
       const text = await ws.readFile(pending.path);
       const found = replaceOnce(text, pending.oldText, pending.newText, pending.path);
       if ('error' in found) return found.error;
-      remember({ path: pending.path, before: text });
+      remember({ path: pending.path, before: text, after: found.text });
       await ws.writeFile(pending.path, found.text);
       return `Edited ${pending.path}.`;
     }
     case 'create_file': {
       if (await ws.exists(pending.path)) return `Error: ${pending.path} already exists.`;
-      remember({ path: pending.path, before: undefined });
+      remember({ path: pending.path, before: undefined, after: pending.content });
       await ws.writeFile(pending.path, pending.content);
       return `Created ${pending.path}.`;
     }
@@ -183,9 +184,20 @@ export async function applyWrite(
         : result.exitCode === undefined
           ? 'Stopped.'
           : `Exit code ${result.exitCode}.`;
-      return capResult(`${status}\n${result.output.trim() || '(no output)'}`, MAX_COMMAND_OUTPUT_CHARS);
+      return `${status}\n${keepEnds(result.output.trim(), MAX_COMMAND_OUTPUT_CHARS) || '(no output)'}`;
     }
   }
+}
+
+/**
+ * Cuts long output to its first and last parts: a build or test run reports its
+ * failures at the end, so cutting only the end would hide them.
+ */
+export function keepEnds(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const head = Math.floor(max / 4);
+  const tail = max - head;
+  return `${text.slice(0, head)}\n… (${text.length - max} characters cut) …\n${text.slice(-tail)}`;
 }
 
 /** One line for the chat and the approval card. */
@@ -212,8 +224,11 @@ export function writePathProblem(path: string): string | undefined {
   const parts = path.split('/');
   if (parts.some((p) => p === '..' || p === '.')) return `Error: ${path} may not use "." or "..".`;
   if (parts.some((p) => p === '')) return `Error: ${path} is not a valid path.`;
-  if (parts[0] === '.git') return 'Error: files in .git are never changed.';
-  if (isSecretPath(path)) return `Error: ${path} may hold secrets and isn't changed.`;
+  // macOS paths ignore case, so ".GIT/config" is ".git/config"; a nested repository's .git counts too.
+  if (parts.some((p) => p.toLowerCase() === '.git')) return 'Error: files in .git are never changed.';
+  if (isSecretPath(path) || isSecretPath(path.toLowerCase())) {
+    return `Error: ${path} may hold secrets and isn't changed.`;
+  }
   return undefined;
 }
 

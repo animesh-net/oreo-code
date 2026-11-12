@@ -49,6 +49,8 @@ export interface AgentDeps {
   onText(delta: string): void;
   onThinking(): void;
   onStep(step: AgentStep): void;
+  /** Called when the task moves to the fallback model, so errors after it are worded for that model. */
+  onMove?(model: ModelInfo): void;
   maxSteps?: number;
 }
 
@@ -112,6 +114,7 @@ export async function runAgent(deps: AgentDeps): Promise<AgentResult> {
       if (deps.signal.aborted || !canMove || !deps.fallback) throw err;
       moved = true;
       current = deps.fallback;
+      deps.onMove?.(current.info);
       step({
         title: `Cloudflare's limit is reached; moved to ${current.info.name} on the Mac`,
         outcome: 'error',
@@ -149,14 +152,21 @@ export async function runAgent(deps: AgentDeps): Promise<AgentResult> {
   if (!reply.trim() && !deps.signal.aborted) {
     deps.wire.push({ role: 'user', content: 'Say briefly what you did and what is left, if anything.' });
     deps.fit(deps.wire, question, current.info.maxPromptChars);
-    for await (const event of current.client.streamChat(current.info.id, deps.wire, deps.signal, 'none')) {
-      if (event.type !== 'text') continue;
-      reply += event.text;
-      deps.onText(event.text);
+    try {
+      for await (const event of current.client.streamChat(current.info.id, deps.wire, deps.signal, 'none')) {
+        if (event.type !== 'text') continue;
+        reply += event.text;
+        deps.onText(event.text);
+      }
+    } catch (err) {
+      // The work is done; a failed summary only loses the summary, unless you pressed Stop.
+      if (deps.signal.aborted) throw err;
     }
   }
   if (!reply.trim()) {
-    reply = steps.length ? `Finished after ${steps.length} tool calls.` : 'Finished without an answer.';
+    reply = steps.length
+      ? `Finished after ${steps.length} tool call${steps.length === 1 ? '' : 's'}.`
+      : 'Finished without an answer.';
     deps.onText(reply);
   }
   return { reply, steps, model: current.info };

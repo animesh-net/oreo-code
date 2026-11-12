@@ -8,6 +8,7 @@ import {
   applyWrite,
   makeDiff,
   prepareWrite,
+  keepEnds,
   writePathProblem,
   type CommandResult,
   type PendingWrite,
@@ -141,6 +142,22 @@ describe('write tools', () => {
     expect(writePathProblem('src/app.ts')).toBeUndefined();
   });
 
+  it('refuses .git at any depth and in any case, and secret files in any case', () => {
+    expect(writePathProblem('.GIT/config')).toMatch(/\.git/);
+    expect(writePathProblem('vendor/lib/.git/hooks/pre-commit')).toMatch(/\.git/);
+    expect(writePathProblem('.ENV')).toMatch(/secrets/);
+    expect(writePathProblem('config/.Env.Local')).toMatch(/secrets/);
+  });
+
+  it('keeps the start and the end of long command output, where failures are', () => {
+    const out = `${'a'.repeat(100)}${'b'.repeat(100)}FAILED: test x`;
+    const kept = keepEnds(out, 80);
+    expect(kept.startsWith('aaaa')).toBe(true);
+    expect(kept.endsWith('FAILED: test x')).toBe(true);
+    expect(kept).toMatch(/characters cut/);
+    expect(keepEnds('short', 80)).toBe('short');
+  });
+
   it('edits only when old_text appears exactly once', async () => {
     const ws = memoryWorkspace({ 'a.ts': 'let x = 1;\nlet y = 1;\n' });
     const missing = await prepareWrite(ws, call('edit_file', { path: 'a.ts', old_text: 'z', new_text: 'q' }));
@@ -210,16 +227,28 @@ describe('checkpoint', () => {
   it('restores edited files to their first state and deletes created ones', async () => {
     const ws = memoryWorkspace({ 'a.ts': 'v1' });
     const cp = new Checkpoint();
-    cp.remember({ path: 'a.ts', before: 'v1' });
+    cp.remember({ path: 'a.ts', before: 'v1', after: 'v2' });
     ws.files['a.ts'] = 'v2';
-    cp.remember({ path: 'a.ts', before: 'v2' }); // a later edit keeps the original
+    cp.remember({ path: 'a.ts', before: 'v2', after: 'v3' }); // a later edit keeps the original
     ws.files['a.ts'] = 'v3';
-    cp.remember({ path: 'new.ts', before: undefined });
+    cp.remember({ path: 'new.ts', before: undefined, after: 'created' });
     ws.files['new.ts'] = 'created';
     expect(cp.files).toEqual(['a.ts', 'new.ts']);
-    expect(await cp.restore(ws)).toEqual([]);
+    expect(await cp.restore(ws)).toEqual({ restored: ['new.ts', 'a.ts'], changed: [], failed: [] });
     expect(ws.files).toEqual({ 'a.ts': 'v1' });
     expect(cp.isEmpty).toBe(true);
+  });
+
+  it('leaves a file alone when it changed after the task wrote it', async () => {
+    const ws = memoryWorkspace({ 'a.ts': 'v1' });
+    const cp = new Checkpoint();
+    cp.remember({ path: 'a.ts', before: 'v1', after: 'v2' });
+    cp.remember({ path: 'new.ts', before: undefined, after: 'created' });
+    ws.files['a.ts'] = 'v2 plus your later work';
+    ws.files['new.ts'] = 'created, then edited by you';
+    expect(await cp.restore(ws)).toEqual({ restored: [], changed: ['new.ts', 'a.ts'], failed: [] });
+    expect(ws.files['a.ts']).toBe('v2 plus your later work');
+    expect(ws.files['new.ts']).toBe('created, then edited by you');
   });
 });
 
@@ -325,14 +354,24 @@ describe('agent loop', () => {
     const limit = new APIError(429, { message: 'daily free allocation' }, undefined, undefined);
     const cloud = scripted([[call('list_files', {})], limit]);
     const mac = scripted(['Finished on the Mac.']);
+    const moves: string[] = [];
     const d = deps(cloud, ws, {
       model: { client: cloud, info: model({ id: '@cf/x', name: 'Oreo 30B', provider: 'cloudflare' }) },
       fallback: { client: mac, info: model() },
+      onMove: (m) => moves.push(m.id),
     });
     const result = await runAgent(d);
     expect(result.reply).toBe('Finished on the Mac.');
     expect(result.model.id).toBe('oreo-4b');
+    expect(moves).toEqual(['oreo-4b']);
     expect(d.steps.some((s) => /moved to Oreo 4B/.test(s.title))).toBe(true);
+  });
+
+  it('keeps the finished work when only the closing summary fails', async () => {
+    const ws = memoryWorkspace({ 'a.ts': 'x' });
+    const client = scripted([[call('list_files', {})], '', new Error('summary failed')]);
+    const result = await runAgent(deps(client, ws));
+    expect(result.reply).toBe('Finished after 1 tool call.');
   });
 
   it('stops with the error when there is no Mac model to move to', async () => {
