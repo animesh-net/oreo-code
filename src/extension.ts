@@ -15,7 +15,7 @@ import { CloudflareClient } from './cloudflare/client';
 import { describeError, downloadRelease, findUpdateWithTokens } from './update/releases';
 import type { ReasoningEffort, ViewState } from './shared/protocol';
 import { ChatViewProvider } from './views/chatViewProvider';
-import { registerInlineCompletion } from './workspace/inlineCompletion';
+import { registerInlineCompletion, type SharedSymbols } from './workspace/inlineCompletion';
 import { currentWorkspace } from './workspace/vscodeWorkspace';
 
 const LAST_MODEL_KEY = 'oreo.lastModel';
@@ -33,6 +33,8 @@ export function activate(context: vscode.ExtensionContext): void {
   const config = () => vscode.workspace.getConfiguration('oreo');
   // The chat's latest state also tells completion where Ollama answers and what it has.
   let latestState: ViewState | undefined;
+  // The symbol index completion keeps; agent mode's find_symbol reads it too.
+  let symbols: SharedSymbols;
   const stateChanged = new vscode.EventEmitter<void>();
 
   const controller = new ChatController({
@@ -44,6 +46,8 @@ export function activate(context: vscode.ExtensionContext): void {
     createClient: (ollamaUrl) => new OllamaClient(ollamaUrl),
     fallbackOllamaUrls: (ollamaUrl) => tailscaleOllamaUrls(ollamaUrl, os.networkInterfaces()),
     getWorkspace: currentWorkspace,
+    getWritableWorkspace: currentWorkspace,
+    findSymbol: (name) => symbols.find(name),
     // Workers AI through oreo-ai's relay on the Pi, over Tailscale; it holds the Cloudflare token.
     getCloudUrl: () => config().get<string>('cloudUrl', ''),
     createCloudClient: (cloudUrl) => new CloudflareClient(cloudUrl),
@@ -55,7 +59,7 @@ export function activate(context: vscode.ExtensionContext): void {
     },
   });
   view.attach(controller);
-  registerInlineCompletion(context, () => latestState, stateChanged.event);
+  symbols = registerInlineCompletion(context, () => latestState, stateChanged.event);
 
   // GitHub tools: github-mcp-server runs on this Mac as a child process, with the
   // GitHub token from the Keychain. It starts on first use, not at activation.

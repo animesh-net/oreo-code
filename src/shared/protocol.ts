@@ -77,6 +77,29 @@ export interface ChatMessage {
   content: string;
   /** What the model looked at while answering, e.g. "Read src/extension.ts". */
   activity?: string[];
+  /** Agent mode: each tool the agent used, in order. */
+  steps?: AgentStep[];
+}
+
+/** One tool call in agent mode, shown collapsed in the chat. */
+export interface AgentStep {
+  /** E.g. "Read src/extension.ts" or "Edit src/app.ts". */
+  title: string;
+  /** The arguments and what came back, as plain text. */
+  detail?: string;
+  outcome: 'ok' | 'rejected' | 'error';
+}
+
+/** A write waiting for your approval in agent mode. */
+export interface ApprovalRequest {
+  id: number;
+  kind: 'edit_file' | 'create_file' | 'run_command';
+  /** E.g. "Edit src/app.ts" or "Run npm test". */
+  title: string;
+  /** The diff for a file, or the exact command line; shown as plain text. */
+  detail: string;
+  /** Where a command runs. */
+  cwd?: string;
 }
 
 export interface ViewState {
@@ -89,6 +112,16 @@ export interface ViewState {
   messages: ChatMessage[];
   busy: boolean;
   error?: string;
+  /** Agent mode is on: the agent may edit files and run commands, with your approval. */
+  agentMode: boolean;
+  /** "Approve edits for this task": edits and new files skip the card; commands still ask. */
+  approveEdits: boolean;
+  /** A folder is open, so agent mode has somewhere to work. */
+  hasFolder: boolean;
+  /** The write waiting for your answer, if any. */
+  approval?: ApprovalRequest;
+  /** Files the last agent task changed, which "Undo task" can put back. */
+  undoFiles?: string[];
 }
 
 export type ToWebview =
@@ -96,6 +129,8 @@ export type ToWebview =
   | { type: 'delta'; text: string }
   /** A tool ran while the reply is being written. */
   | { type: 'activity'; text: string }
+  /** Agent mode: a tool call finished (or was rejected). */
+  | { type: 'step'; step: AgentStep }
   /** The model is thinking before it writes (cleared by the next text). */
   | { type: 'thinking' }
   /** A turn failed: show the error and put the user's text back in the input. */
@@ -108,4 +143,8 @@ export type FromWebview =
   | { type: 'selectModel'; modelId: string }
   | { type: 'selectEffort'; effort: ReasoningEffort }
   | { type: 'newChat' }
-  | { type: 'retry' };
+  | { type: 'retry' }
+  | { type: 'setAgentMode'; on: boolean }
+  | { type: 'setApproveEdits'; on: boolean }
+  | { type: 'approval'; id: number; approved: boolean }
+  | { type: 'undoTask' };

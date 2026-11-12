@@ -56,6 +56,16 @@ function githubWriteProblem(tool: string, args: Record<string, unknown>): string
   return undefined;
 }
 
+/**
+ * Whether agent mode's own write tools (src/agent/writeTools.ts) need your approval.
+ * A command always does. Edits and new files do unless you switched on "Approve
+ * edits for this task", which covers only those two and only that task.
+ */
+export function needsApproval(tool: 'edit_file' | 'create_file' | 'run_command', approveEdits: boolean): boolean {
+  if (tool === 'run_command') return true;
+  return !approveEdits;
+}
+
 /** One line for the approval card; the card also shows the full arguments. */
 export function summarize(tool: CatalogTool, args: Record<string, unknown>): string {
   const repo = [str(args.owner), str(args.repo)].filter(Boolean).join('/');

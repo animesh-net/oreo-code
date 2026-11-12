@@ -14,11 +14,21 @@ const ANSWER_RULES = [
   "- The user's instructions on format, length and scope come before these defaults.",
 ];
 
+/** Agent mode: how to work through a task with the tools. */
+const AGENT_RULES = [
+  'You are in agent mode: you can change this repository with tools, and the user approves each change.',
+  '- Look before you change: use find_symbol, search, list_files and read_file to find the code; never guess what a file contains.',
+  '- Change files with edit_file (old_text copied exactly from read_file, unique in the file) or create_file. Keep each change small and focused.',
+  "- Use run_command to build or test, e.g. the project's test command, and fix what fails. Commands run in the repository root.",
+  '- If the user rejects a change, do not repeat it; ask or try another way.',
+  '- Work step by step and stop when the task is done. Then say in a few lines which files you changed and what is left.',
+];
+
 /**
  * The system prompt sent with every message: how to answer, which repository is open,
  * its files, and the file in the editor. Kept well inside the models' 32K-token context.
  */
-export async function buildSystemPrompt(ws: Workspace | undefined, withTools: boolean): Promise<string> {
+export async function buildSystemPrompt(ws: Workspace | undefined, withTools: boolean, agent = false): Promise<string> {
   const lines = ["You are Oreo Code, a coding assistant inside VS Code on the user's Mac.", ...ANSWER_RULES, ''];
   if (!ws) {
     lines.push('No folder is open, so there is no repository to look at. Answer from the conversation.');
@@ -29,11 +39,15 @@ export async function buildSystemPrompt(ws: Workspace | undefined, withTools: bo
   lines.push(
     `You are working in the repository "${ws.name}"${branch ? ` on branch ${branch}` : ''}. When the user says "my code", "the repo" or "this project", they mean this repository.`,
   );
-  lines.push(
-    withTools
-      ? 'Use the tools list_files, search and read_file to look at the code before you answer; never guess what a file contains. Before saying how a function is used, search for its name and read its callers. You can only read: suggest changes as code in your reply, naming the file and lines. Say which files you looked at.'
-      : "You can't open files. You see the file list below and the file open in the editor; if you need another file, ask the user to open it in the editor.",
-  );
+  if (agent) {
+    lines.push(...AGENT_RULES);
+  } else {
+    lines.push(
+      withTools
+        ? 'Use the tools list_files, search and read_file to look at the code before you answer; never guess what a file contains. Before saying how a function is used, search for its name and read its callers. You can only read: suggest changes as code in your reply, naming the file and lines. Say which files you looked at.'
+        : "You can't open files. You see the file list below and the file open in the editor; if you need another file, ask the user to open it in the editor.",
+    );
+  }
   lines.push(
     '',
     'When asked to find bugs or review code:',
@@ -61,6 +75,11 @@ export async function buildSystemPrompt(ws: Workspace | undefined, withTools: bo
     }
   }
   // Small models weigh the end of the prompt most; repeat the key rule after the snapshot.
-  lines.push('', "The files above are reference only. Answer the user's latest message, briefly.");
+  lines.push(
+    '',
+    agent
+      ? 'The files above are reference only. Do the task in the latest message with the tools, then say briefly what you changed.'
+      : "The files above are reference only. Answer the user's latest message, briefly.",
+  );
   return lines.join('\n');
 }

@@ -3,7 +3,7 @@ import { isSecretPath } from '../agent/workspaceTools';
 import { CompletionEngine, DEBOUNCE_MS, delay, skipReason, type CompletionSettings } from '../completion/engine';
 import { GitIgnore } from '../completion/gitignore';
 import { languageOf } from '../completion/imports';
-import { INDEX_LIMITS, SymbolIndex } from '../completion/symbols';
+import { INDEX_LIMITS, SymbolIndex, type CodeSymbol } from '../completion/symbols';
 import { completionModel } from '../ollama/models';
 import type { ViewState } from '../shared/protocol';
 import { currentWorkspace } from './vscodeWorkspace';
@@ -11,6 +11,12 @@ import { currentWorkspace } from './vscodeWorkspace';
 const RECENT_MAX = 20;
 /** Folders never indexed, as in the workspace listing. */
 const SKIP_DIRS = /(^|\/)(node_modules|\.git|dist|out|build|coverage|\.next|bin|obj|\.venv)\//;
+
+/** The symbol index inline completion keeps, shared with agent mode's find_symbol. */
+export interface SharedSymbols {
+  /** Definitions by exact name; builds the index first if it isn't yet. */
+  find(name: string): Promise<readonly CodeSymbol[]>;
+}
 
 /**
  * Inline completion (ghost text) from the Mac's completion model, with snippets from
@@ -21,7 +27,7 @@ export function registerInlineCompletion(
   context: vscode.ExtensionContext,
   getState: () => ViewState | undefined,
   onStateChange: vscode.Event<void>,
-): void {
+): SharedSymbols {
   const config = () => vscode.workspace.getConfiguration('oreo.completion');
   const recent: string[] = [];
   const symbols = new SymbolIndex();
@@ -232,4 +238,10 @@ export function registerInlineCompletion(
   // Build the index a little after start-up, out of the way of activation.
   const timer = setTimeout(() => void ensureIndex(), 5_000);
   context.subscriptions.push({ dispose: () => clearTimeout(timer) });
+  return {
+    find: async (name) => {
+      await ensureIndex();
+      return symbols.lookup(name);
+    },
+  };
 }

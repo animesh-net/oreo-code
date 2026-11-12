@@ -1,14 +1,21 @@
+import { Checkpoint } from '../agent/checkpoint';
+import { FIND_SYMBOL_TOOL, runFindSymbol } from '../agent/findSymbol';
+import { runAgent, type AgentModel } from '../agent/loop';
+import { describeWrite, type PendingWrite, type WritableWorkspace } from '../agent/writeTools';
 import { runWorkspaceTool, WORKSPACE_TOOLS, type Workspace } from '../agent/workspaceTools';
+import type { CodeSymbol } from '../completion/symbols';
 import type { ModelClient, ToolCall, WireMessage } from '../ollama/client';
 import { buildSystemPrompt } from './context';
 import { cloudModels } from '../cloudflare/client';
-import { describeCloudflareError } from '../cloudflare/errors';
+import { describeCloudflareError, isCloudLimitError } from '../cloudflare/errors';
 import { describeOllamaError, isUnreachable } from '../ollama/errors';
 import { inCatalogOrder, OREO_MODELS } from '../ollama/models';
 import { isLoopbackUrl, normalizeOllamaUrl } from '../ollama/url';
 import {
   DEFAULT_EFFORT,
   REASONING_EFFORTS,
+  type AgentStep,
+  type ApprovalRequest,
   type ChatMessage,
   type FromWebview,
   type ModelInfo,
@@ -40,6 +47,10 @@ export interface ChatControllerDeps {
   createCloudClient?(cloudUrl: string): ModelClient;
   /** The open folder, for the repo snapshot and the read-only tools; none if no folder is open. */
   getWorkspace?(): Workspace | undefined;
+  /** The open folder with writing and commands, for agent mode; none if no folder is open. */
+  getWritableWorkspace?(): WritableWorkspace | undefined;
+  /** Definitions by name from the symbol index inline completion keeps (find_symbol). */
+  findSymbol?(name: string): Promise<readonly CodeSymbol[]>;
   /** Sends a message to the webview (a no-op while the view is closed). */
   post(message: ToWebview): void;
   /** Called after every state change, e.g. to update the status bar. */
@@ -120,6 +131,12 @@ export class ChatController {
   private error: string | undefined;
   private abort: AbortController | undefined;
   private refreshSeq = 0;
+  private agentMode = false;
+  private approveEdits = false;
+  private approval: { request: ApprovalRequest; answer(approved: boolean): void } | undefined;
+  private approvalSeq = 0;
+  /** What the last agent task changed, for "Undo task". */
+  private checkpoint: Checkpoint | undefined;
 
   constructor(private readonly deps: ChatControllerDeps) {}
 
@@ -252,6 +269,22 @@ export class ChatController {
       case 'retry':
         await this.refresh();
         return;
+      case 'setAgentMode':
+        if (!this.busy) {
+          this.agentMode = message.on;
+          this.publish();
+        }
+        return;
+      case 'setApproveEdits':
+        this.approveEdits = message.on;
+        this.publish();
+        return;
+      case 'approval':
+        if (this.approval?.request.id === message.id) this.approval.answer(message.approved);
+        return;
+      case 'undoTask':
+        await this.undoTask();
+        return;
     }
   }
 
@@ -259,6 +292,7 @@ export class ChatController {
     this.abort?.abort();
     this.messages = [];
     this.error = undefined;
+    this.checkpoint = undefined;
     this.publish();
   }
 
@@ -271,6 +305,11 @@ export class ChatController {
       messages: [...this.messages],
       busy: this.busy,
       error: this.error,
+      agentMode: this.agentMode,
+      approveEdits: this.approveEdits,
+      hasFolder: !!this.deps.getWritableWorkspace?.(),
+      approval: this.approval?.request,
+      undoFiles: !this.busy && this.checkpoint && !this.checkpoint.isEmpty ? this.checkpoint.files : undefined,
     };
   }
 
@@ -299,12 +338,30 @@ export class ChatController {
 
     let reply = '';
     const activity: string[] = [];
+    const steps: AgentStep[] = [];
     const finish = () => {
       const message: ChatMessage = { role: 'assistant', content: reply };
       if (activity.length) message.activity = activity;
+      if (steps.length) message.steps = steps;
       this.messages.push(message);
     };
+    const writable = this.agentMode && info?.supportsTools ? this.deps.getWritableWorkspace?.() : undefined;
     try {
+      if (writable && info) {
+        const result = await this.runAgentTask(writable, { client, info }, history, abort.signal, {
+          onText: (delta) => {
+            reply += delta;
+            this.deps.post({ type: 'delta', text: delta });
+          },
+          onStep: (step) => {
+            steps.push(step);
+            this.deps.post({ type: 'step', step });
+          },
+        });
+        reply = result.reply;
+        finish();
+        return;
+      }
       const workspace = this.deps.getWorkspace?.();
       const tools = info?.supportsTools && workspace ? WORKSPACE_TOOLS : undefined;
       const wire: WireMessage[] = [
@@ -358,22 +415,127 @@ export class ChatController {
       finish();
     } catch (err) {
       if (abort.signal.aborted) {
-        // You pressed Stop: keep what arrived, if anything.
-        if (reply) finish();
+        // You pressed Stop: keep what arrived, if anything, and the agent's steps.
+        if (reply || steps.length) finish();
         else this.messages.splice(turnStart);
       } else {
-        this.messages.splice(turnStart);
         const message = inCloud
           ? describeCloudflareError(err, this.cloudUrl)
           : describeOllamaError(err, this.ollamaUrl, model);
         this.error = message;
-        this.deps.post({ type: 'failed', message, draft: text });
+        if (steps.length) {
+          // An agent task that already used tools stays in the chat, so you can see (and undo) what it did.
+          finish();
+        } else {
+          this.messages.splice(turnStart);
+          this.deps.post({ type: 'failed', message, draft: text });
+        }
       }
     } finally {
       this.busy = false;
+      // "Approve edits for this task" covers one task only.
+      this.approveEdits = false;
       if (this.abort === abort) this.abort = undefined;
       this.publish();
     }
+  }
+
+  /**
+   * Agent mode: the read tools, find_symbol and the write tools, with every write
+   * approved first (src/agent/policy.ts) and remembered for "Undo task".
+   */
+  private async runAgentTask(
+    ws: WritableWorkspace,
+    model: AgentModel,
+    history: ChatMessage[],
+    signal: AbortSignal,
+    on: { onText(delta: string): void; onStep(step: AgentStep): void },
+  ) {
+    const checkpoint = new Checkpoint();
+    this.checkpoint = checkpoint;
+    const findSymbol = this.deps.findSymbol;
+    const wire: WireMessage[] = [
+      { role: 'system', content: await buildSystemPrompt(ws, true, true) },
+      ...historyToWire(history),
+    ];
+    return runAgent({
+      model,
+      fallback: model.info.provider === 'cloudflare' ? this.macFallback() : undefined,
+      isCloudLimit: isCloudLimitError,
+      wire,
+      question: wire.length - 1,
+      fit: fitToContext,
+      effort: this.effort,
+      signal,
+      readTools: findSymbol ? [...WORKSPACE_TOOLS, FIND_SYMBOL_TOOL] : WORKSPACE_TOOLS,
+      runRead: (call) =>
+        call.function.name === FIND_SYMBOL_TOOL.function.name && findSymbol
+          ? runFindSymbol(findSymbol, call)
+          : runWorkspaceTool(ws, call),
+      workspace: ws,
+      approveEdits: () => this.approveEdits,
+      requestApproval: (pending) => this.requestApproval(pending, ws, signal),
+      checkpoint,
+      onText: on.onText,
+      onThinking: () => this.deps.post({ type: 'thinking' }),
+      onStep: on.onStep,
+    });
+  }
+
+  /** The Mac model with tools ranked first, if Ollama has it: where agent mode goes when Cloudflare's limit is hit. */
+  private macFallback(): AgentModel | undefined {
+    if (!this.client) return undefined;
+    const info = this.models
+      .filter((m) => m.provider === 'macbook' && m.supportsTools && m.available && m.defaultRank !== undefined)
+      .sort((a, b) => (a.defaultRank ?? 0) - (b.defaultRank ?? 0))[0];
+    return info ? { client: this.client, info } : undefined;
+  }
+
+  /** Shows the approval card and waits for Approve or Reject; Stop counts as Reject. */
+  private requestApproval(pending: PendingWrite, ws: WritableWorkspace, signal: AbortSignal): Promise<boolean> {
+    return new Promise((resolve) => {
+      const id = ++this.approvalSeq;
+      const answer = (approved: boolean) => {
+        if (this.approval?.request.id !== id) return;
+        this.approval = undefined;
+        signal.removeEventListener('abort', onAbort);
+        this.publish();
+        resolve(approved);
+      };
+      const onAbort = () => answer(false);
+      signal.addEventListener('abort', onAbort, { once: true });
+      this.approval = {
+        request: {
+          id,
+          kind: pending.kind,
+          title: describeWrite(pending),
+          detail: pending.kind === 'run_command' ? pending.command : pending.diff,
+          ...(pending.kind === 'run_command' ? { cwd: ws.root ?? ws.name } : {}),
+        },
+        answer,
+      };
+      this.publish();
+      if (signal.aborted) onAbort();
+    });
+  }
+
+  /** Puts back every file the last agent task changed. */
+  private async undoTask(): Promise<void> {
+    const checkpoint = this.checkpoint;
+    const ws = this.deps.getWritableWorkspace?.();
+    if (this.busy || !checkpoint || checkpoint.isEmpty || !ws) return;
+    const files = checkpoint.files;
+    const failed = await checkpoint.restore(ws);
+    this.checkpoint = undefined;
+    const restored = files.filter((f) => !failed.includes(f));
+    this.messages.push({
+      role: 'assistant',
+      content:
+        `Undid the last task: put back ${restored.length} file${restored.length === 1 ? '' : 's'} (${restored.join(', ') || 'none'}).` +
+        (failed.length ? ` Couldn't restore ${failed.join(', ')}.` : '') +
+        ' Commands it ran are not undone.',
+    });
+    this.publish();
   }
 
   private publish(): void {

@@ -1,5 +1,7 @@
+import { spawn } from 'node:child_process';
 import * as vscode from 'vscode';
-import type { ActiveFile, Workspace } from '../agent/workspaceTools';
+import type { ActiveFile } from '../agent/workspaceTools';
+import { COMMAND_TIMEOUT_MS, type CommandResult, type WritableWorkspace } from '../agent/writeTools';
 
 /** Folders never listed or read: dependencies, git internals and build output. */
 const EXCLUDE =
@@ -8,19 +10,110 @@ const MAX_FILES = 5000;
 const MAX_FILE_BYTES = 1_000_000;
 const LIST_TTL_MS = 30_000;
 
+/** Output kept from a command; the model gets less (src/agent/writeTools.ts). */
+const MAX_COMMAND_CAPTURE = 200_000;
+
 /** The first open folder, or undefined when none is open. */
-export function currentWorkspace(): Workspace | undefined {
+export function currentWorkspace(): WritableWorkspace | undefined {
   const folder = vscode.workspace.workspaceFolders?.[0];
   return folder ? new FolderWorkspace(folder) : undefined;
 }
 
 let cached: { root: string; at: number; files: Promise<string[]> } | undefined;
 
-class FolderWorkspace implements Workspace {
+class FolderWorkspace implements WritableWorkspace {
   readonly name: string;
+  readonly root: string;
 
   constructor(private readonly folder: vscode.WorkspaceFolder) {
     this.name = folder.name;
+    this.root = folder.uri.fsPath;
+  }
+
+  private uri(path: string): vscode.Uri {
+    return vscode.Uri.joinPath(this.folder.uri, ...path.split('/'));
+  }
+
+  async exists(path: string): Promise<boolean> {
+    try {
+      await vscode.workspace.fs.stat(this.uri(path));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Writes the whole file. An open editor gets the text as an edit and is saved, so
+   * its undo history and unsaved state stay consistent; otherwise the file is written
+   * on disk, creating its folders.
+   */
+  async writeFile(path: string, text: string): Promise<void> {
+    const uri = this.uri(path);
+    const open = vscode.workspace.textDocuments.find((d) => d.uri.toString() === uri.toString());
+    if (open) {
+      const edit = new vscode.WorkspaceEdit();
+      edit.replace(uri, new vscode.Range(open.positionAt(0), open.positionAt(open.getText().length)), text);
+      if (!(await vscode.workspace.applyEdit(edit))) throw new Error(`VS Code didn't apply the edit to ${path}.`);
+      await open.save();
+    } else {
+      await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(uri, '..'));
+      await vscode.workspace.fs.writeFile(uri, new TextEncoder().encode(text));
+    }
+    cached = undefined;
+  }
+
+  async deleteFile(path: string): Promise<void> {
+    await vscode.workspace.fs.delete(this.uri(path), { useTrash: true });
+    cached = undefined;
+  }
+
+  /**
+   * Runs the command line with the user's login shell in the folder's root, as typed
+   * in a terminal there, so PATH tools (npm, dotnet) are found. Stopped after
+   * COMMAND_TIMEOUT_MS or on Stop.
+   */
+  runCommand(command: string, signal: AbortSignal): Promise<CommandResult> {
+    return new Promise((resolve) => {
+      const shell = process.env.SHELL || '/bin/zsh';
+      const child = spawn(shell, ['-lc', command], {
+        cwd: this.root,
+        env: { ...process.env, CI: '1', FORCE_COLOR: '0', NO_COLOR: '1' },
+        stdio: ['ignore', 'pipe', 'pipe'],
+        // Its own process group, so Stop and the timeout end the whole command, not just the shell.
+        detached: true,
+      });
+      let output = '';
+      let timedOut = false;
+      const add = (chunk: Buffer) => {
+        if (output.length < MAX_COMMAND_CAPTURE) output += chunk.toString('utf8');
+      };
+      child.stdout.on('data', add);
+      child.stderr.on('data', add);
+      const kill = () => {
+        try {
+          if (child.pid) process.kill(-child.pid, 'SIGTERM');
+        } catch {
+          child.kill('SIGTERM');
+        }
+      };
+      const timer = setTimeout(() => {
+        timedOut = true;
+        kill();
+      }, COMMAND_TIMEOUT_MS);
+      signal.addEventListener('abort', kill, { once: true });
+      const done = (exitCode: number | undefined) => {
+        clearTimeout(timer);
+        signal.removeEventListener('abort', kill);
+        cached = undefined;
+        resolve({ exitCode, output, timedOut });
+      };
+      child.on('error', (err) => {
+        output += err.message;
+        done(undefined);
+      });
+      child.on('close', (code) => done(code ?? undefined));
+    });
   }
 
   listFiles(): Promise<string[]> {
@@ -37,7 +130,7 @@ class FolderWorkspace implements Workspace {
 
   /** Unsaved editor text wins over the file on disk. */
   async readFile(path: string): Promise<string> {
-    const uri = vscode.Uri.joinPath(this.folder.uri, ...path.split('/'));
+    const uri = this.uri(path);
     const open = vscode.workspace.textDocuments.find((d) => d.uri.toString() === uri.toString());
     if (open) return open.getText();
     const stat = await vscode.workspace.fs.stat(uri);
