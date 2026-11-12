@@ -45,16 +45,14 @@ export function detectCheckCommand(files: readonly string[], packageJson: string
 const quote = (path: string) => `'${path.replace(/'/g, "'\\''")}'`;
 
 /**
- * A syntax check for changed files when the project has no check of its own: it parses
- * them without running them (`node --check`, Python's ast.parse), so it needs no approval.
+ * A syntax check for changed Python files when the project has no check of its own: it
+ * parses them with Python's own parser without running them, so it needs no approval,
+ * and passes when python3 isn't installed. JavaScript and TypeScript are left to VS Code's
+ * built-in errors: `node --check` rejects valid JSX or Flow depending on the Node version.
  */
 export function syntaxCheckCommand(changed: readonly string[]): string | undefined {
-  const parts: string[] = [];
-  for (const path of changed) {
-    if (/\.(js|mjs|cjs)$/i.test(path)) parts.push(`node --check ${quote(path)}`);
-    else if (/\.py$/i.test(path)) {
-      parts.push(`python3 -c 'import ast,sys; ast.parse(open(sys.argv[1]).read(), sys.argv[1])' ${quote(path)}`);
-    }
-  }
-  return parts.length ? parts.join(' && ') : undefined;
+  const parse = changed
+    .filter((path) => /\.py$/i.test(path))
+    .map((path) => `python3 -c 'import ast,sys; ast.parse(open(sys.argv[1]).read(), sys.argv[1])' ${quote(path)}`);
+  return parse.length ? `if command -v python3 >/dev/null 2>&1; then ${parse.join(' && ')}; fi` : undefined;
 }

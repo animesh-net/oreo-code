@@ -420,11 +420,15 @@ async function verifyWork(
       const passed = !result.timedOut && result.exitCode === 0;
       const output = keepEnds(result.output.trim(), MAX_COMMAND_OUTPUT_CHARS) || '(no output)';
       step({
-        title: `Checked the syntax of the changed files: ${passed ? 'passed' : 'failed'}`,
+        title: `Checked the syntax of the changed Python files: ${passed ? 'passed' : 'failed'}`,
         detail: clip(output),
         outcome: passed ? 'ok' : 'error',
       });
-      if (!passed) failures.push(`The syntax check \`${syntax}\` failed:\n${output}`);
+      if (!passed) {
+        failures.push(
+          `Python couldn't parse a changed file:\n${output}\nIf this is valid syntax that this Python version doesn't know, say so instead of changing it.`,
+        );
+      }
     }
   }
   if (deps.checkCommand && check.allowed) {

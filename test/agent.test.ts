@@ -1154,21 +1154,27 @@ describe('step limit, file-reading commands and the syntax check', () => {
       const r = await prepareWrite(ws, call('run_command', { command }));
       expect('error' in r && r.error).toMatch(/use read_file/);
     }
-    for (const command of ['npm start 2>&1 | head -50', 'node server/start.js', 'cat a.log | grep ERR']) {
+    for (const command of [
+      'npm start 2>&1 | head -50',
+      'node server/start.js',
+      'cat a.log | grep ERR',
+      'cat node_modules/express/package.json',
+      'ls .venv/lib',
+      'head -20 /etc/hosts',
+    ]) {
       expect('pending' in (await prepareWrite(ws, call('run_command', { command })))).toBe(true);
     }
   });
 
-  it('builds a parse-only syntax check for changed JavaScript and Python files', () => {
-    expect(syntaxCheckCommand(['server/start.js', 'README.md', "it's.mjs"])).toBe(
-      "node --check 'server/start.js' && node --check 'it'\\''s.mjs'",
+  it('builds a parse-only syntax check for changed Python files only', () => {
+    expect(syntaxCheckCommand(['app/main.py', "it's.py"])).toBe(
+      "if command -v python3 >/dev/null 2>&1; then python3 -c 'import ast,sys; ast.parse(open(sys.argv[1]).read(), sys.argv[1])' 'app/main.py' && python3 -c 'import ast,sys; ast.parse(open(sys.argv[1]).read(), sys.argv[1])' 'it'\\''s.py'; fi",
     );
-    expect(syntaxCheckCommand(['app/main.py'])).toMatch(/^python3 -c 'import ast,sys; .*' 'app\/main\.py'$/);
-    expect(syntaxCheckCommand(['README.md'])).toBeUndefined();
+    expect(syntaxCheckCommand(['server/start.js', 'App.jsx', 'README.md'])).toBeUndefined();
   });
 
   it('checks the syntax without a card when the project has no check, and sends failures back', async () => {
-    const ws = memoryWorkspace({ 'server/start.js': 'bad(' });
+    const ws = memoryWorkspace({ 'app/start.py': 'bad(' });
     let fixed = false;
     ws.runCommand = async (command) => {
       ws.commands.push(command);
@@ -1177,9 +1183,9 @@ describe('step limit, file-reading commands and the syntax check', () => {
         : { exitCode: 1, output: 'SyntaxError: missing )', timedOut: false };
     };
     const client = scripted([
-      [call('edit_file', { path: 'server/start.js', old_text: 'bad(', new_text: 'bad(x' })],
+      [call('edit_file', { path: 'app/start.py', old_text: 'bad(', new_text: 'bad(x' })],
       'Done.',
-      [call('edit_file', { path: 'server/start.js', old_text: 'bad(x', new_text: 'bad(x)' }, 'c2')],
+      [call('edit_file', { path: 'app/start.py', old_text: 'bad(x', new_text: 'bad(x)' }, 'c2')],
       'Fixed the call.',
     ]);
     const origWrite = ws.writeFile;
@@ -1189,9 +1195,10 @@ describe('step limit, file-reading commands and the syntax check', () => {
     };
     const d = deps(client, ws, { approveEdits: () => true });
     const result = await runAgent(d);
-    expect(ws.commands).toEqual(["node --check 'server/start.js'", "node --check 'server/start.js'"]);
+    expect(ws.commands).toHaveLength(2);
+    expect(ws.commands[0]).toMatch(/ast\.parse.*'app\/start\.py'/);
     expect(d.approvals).toEqual([]);
-    expect(client.calls[2].wire.at(-1)?.content).toMatch(/syntax check[\s\S]*SyntaxError/);
+    expect(client.calls[2].wire.at(-1)?.content).toMatch(/Python couldn't parse a changed file[\s\S]*SyntaxError/);
     expect(result.reply).toMatch(/Fixed the call\.$/);
   });
 
