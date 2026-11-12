@@ -154,6 +154,13 @@ export async function prepareWrite(
       if (HIDDEN_CHARS.test(command)) {
         return { error: 'Error: the command has hidden or control characters. Send it as plain text.' };
       }
+      // Looking at files is what read_file, list_files and search are for: no approval, no step wasted.
+      if (READS_FILES.test(command) && !OUTSIDE_LISTING.test(command)) {
+        return {
+          error:
+            'Error: use read_file to read a file, list_files to list them and search to find text; run_command is for building, testing and running.',
+        };
+      }
       return { pending: { kind: 'run_command', command } };
     }
     default:
@@ -508,6 +515,13 @@ export function makeDiff(path: string, before: string | undefined, after: string
   ];
   return lines.join('\n');
 }
+
+/** A command that only reads or lists files, with no pipe, redirect or chaining. */
+const READS_FILES = /^\s*(cat|head|tail|less|more|ls|find|grep|rg|wc)\b[^|;&<>`$]*$/;
+
+/** Folders read_file and list_files can't see (ignored or outside the folder): reading them by command is fine. */
+const OUTSIDE_LISTING =
+  /(node_modules|\.venv|\bvenv\/|\bvendor\/|\bdist\/|\bbuild\/|\bbin\/|\bobj\/|\.next\/|\s\/|\s~)/;
 
 /**
  * Characters that can make a command look different from what runs: control

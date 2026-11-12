@@ -40,3 +40,24 @@ export function detectCheckCommand(files: readonly string[], packageJson: string
   if (root.has('go.mod')) return 'go build ./...';
   return undefined;
 }
+
+/** Quotes a path for the shell: paths are checked by writePathProblem, but quoting keeps it plain. */
+const quote = (path: string) => `'${path.replace(/'/g, "'\\''")}'`;
+
+/** The exit code a shell gives for a command it can't find: then the syntax check is skipped. */
+export const COMMAND_NOT_FOUND = 127;
+
+/**
+ * A syntax check for changed Python files when the project has no check of its own: it
+ * parses them with Python's own parser without running them, so it needs no approval.
+ * One plain command, so it works in any login shell (zsh, bash, fish); if python3 isn't
+ * there, the shell exits with COMMAND_NOT_FOUND and the check is skipped. JavaScript and
+ * TypeScript are left to VS Code's built-in errors: `node --check` rejects valid JSX or
+ * Flow depending on the Node version.
+ */
+export function syntaxCheckCommand(changed: readonly string[]): string | undefined {
+  const files = changed.filter((path) => /\.py$/i.test(path)).map(quote);
+  return files.length
+    ? `python3 -c 'import ast,sys; [ast.parse(open(f).read(), f) for f in sys.argv[1:]]' ${files.join(' ')}`
+    : undefined;
+}

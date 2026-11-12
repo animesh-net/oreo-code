@@ -2,7 +2,7 @@ import { APIError } from 'openai';
 import { describe, expect, it } from 'vitest';
 import { Checkpoint } from '../src/agent/checkpoint';
 import { describeProblems, Instructions, newProblems, type Problem } from '../src/agent/instructions';
-import { detectCheckCommand } from '../src/agent/verify';
+import { detectCheckCommand, syntaxCheckCommand } from '../src/agent/verify';
 import { FIND_SYMBOL_TOOL, runFindSymbol } from '../src/agent/findSymbol';
 import {
   announcesAction,
@@ -464,7 +464,7 @@ describe('agent loop', () => {
     // The scripted model keeps calling tools; the last call gets no tools, then one summary request.
     expect(client.calls.filter((c) => c.tools).length).toBe(MAX_AGENT_STEPS - 1);
     expect(client.calls.length).toBe(MAX_AGENT_STEPS + 1);
-    expect(result.reply).toMatch(/Finished after/);
+    expect(result.reply).toMatch(new RegExp(`Stopped at the ${MAX_AGENT_STEPS}-step limit before finishing`));
   });
 
   it('retries once after a malformed tool call, then stops', async () => {
@@ -1144,5 +1144,111 @@ describe('loose edits keep the file tidy', () => {
     if (!('pending' in prepared)) throw new Error('expected pending');
     await applyWrite(ws, prepared.pending, new AbortController().signal, () => {});
     expect(ws.files['b.js']).toBe('a();\nb();\n');
+  });
+});
+
+describe('step limit, file-reading commands and the syntax check', () => {
+  it('sends commands that only read files back to read_file', async () => {
+    const ws = memoryWorkspace({});
+    for (const command of ['cat server/index.js', 'tail -5 server/start.js', 'ls -la public', 'grep -n foo a.js']) {
+      const r = await prepareWrite(ws, call('run_command', { command }));
+      expect('error' in r && r.error).toMatch(/use read_file/);
+    }
+    for (const command of [
+      'npm start 2>&1 | head -50',
+      'node server/start.js',
+      'cat a.log | grep ERR',
+      'cat node_modules/express/package.json',
+      'ls .venv/lib',
+      'head -20 /etc/hosts',
+    ]) {
+      expect('pending' in (await prepareWrite(ws, call('run_command', { command })))).toBe(true);
+    }
+  });
+
+  it('builds one plain parse-only command for changed Python files, for any shell', () => {
+    expect(syntaxCheckCommand(['app/main.py', "it's.py", 'README.md'])).toBe(
+      "python3 -c 'import ast,sys; [ast.parse(open(f).read(), f) for f in sys.argv[1:]]' 'app/main.py' 'it'\\''s.py'",
+    );
+    expect(syntaxCheckCommand(['server/start.js', 'App.jsx', 'README.md'])).toBeUndefined();
+  });
+
+  it('still checks Python syntax when you reject the project check', async () => {
+    const ws = memoryWorkspace({ 'a.py': 'x = 1' });
+    const client = scripted([[call('edit_file', { path: 'a.py', old_text: 'x = 1', new_text: 'x = 2' })], 'Done.']);
+    const d = deps(client, ws, {
+      approveEdits: () => true,
+      checkCommand: 'pytest',
+      requestApproval: async () => false,
+    });
+    await runAgent(d);
+    expect(ws.commands).toHaveLength(1);
+    expect(ws.commands[0]).toMatch(/^python3 -c .*'a\.py'$/);
+    expect(d.steps.map((s) => s.title)).toEqual(
+      expect.arrayContaining([
+        'Skipped the project check `pytest` (rejected)',
+        'Checked the syntax of the changed Python files: passed',
+      ]),
+    );
+  });
+
+  it('skips the Python syntax check when python3 is not installed', async () => {
+    const ws = memoryWorkspace({ 'a.py': 'x = 1' });
+    ws.runCommand = async (command) => {
+      ws.commands.push(command);
+      return { exitCode: 127, output: 'python3: command not found', timedOut: false };
+    };
+    const client = scripted([[call('edit_file', { path: 'a.py', old_text: 'x = 1', new_text: 'x = 2' })], 'Done.']);
+    const d = deps(client, ws, { approveEdits: () => true });
+    const result = await runAgent(d);
+    expect(result.reply).toBe('Done.');
+    expect(d.steps.some((s) => /Skipped the Python syntax check/.test(s.title))).toBe(true);
+  });
+
+  it('checks the syntax without a card when the project has no check, and sends failures back', async () => {
+    const ws = memoryWorkspace({ 'app/start.py': 'bad(' });
+    let fixed = false;
+    ws.runCommand = async (command) => {
+      ws.commands.push(command);
+      return fixed
+        ? { exitCode: 0, output: '', timedOut: false }
+        : { exitCode: 1, output: 'SyntaxError: missing )', timedOut: false };
+    };
+    const client = scripted([
+      [call('edit_file', { path: 'app/start.py', old_text: 'bad(', new_text: 'bad(x' })],
+      'Done.',
+      [call('edit_file', { path: 'app/start.py', old_text: 'bad(x', new_text: 'bad(x)' }, 'c2')],
+      'Fixed the call.',
+    ]);
+    const origWrite = ws.writeFile;
+    ws.writeFile = async (p, t) => {
+      await origWrite(p, t);
+      fixed = t === 'bad(x)';
+    };
+    const d = deps(client, ws, { approveEdits: () => true });
+    const result = await runAgent(d);
+    expect(ws.commands).toHaveLength(2);
+    expect(ws.commands[0]).toMatch(/ast\.parse.*'app\/start\.py'/);
+    expect(d.approvals).toEqual([]);
+    expect(client.calls[2].wire.at(-1)?.content).toMatch(/Python couldn't parse a changed file[\s\S]*SyntaxError/);
+    expect(result.reply).toMatch(/Fixed the call\.$/);
+  });
+
+  it('says so when the task stops at the step limit mid-way', async () => {
+    const ws = memoryWorkspace({ 'a.js': 'x' });
+    const client = scripted([
+      [call('list_files', {})],
+      [call('list_files', {}, 'c2')],
+      "Let me check what's actually needed:",
+    ]);
+    const result = await runAgent(deps(client, ws, { maxSteps: 3 }));
+    expect(result.reply).toMatch(/Stopped at the 3-step limit before finishing\. Send "continue" to go on\.$/);
+  });
+
+  it('adds no note when the last step is a real answer', async () => {
+    const ws = memoryWorkspace({ 'a.js': 'x' });
+    const client = scripted([[call('list_files', {})], 'All good: nothing to change.']);
+    const result = await runAgent(deps(client, ws, { maxSteps: 2 }));
+    expect(result.reply).toBe('All good: nothing to change.');
   });
 });

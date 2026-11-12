@@ -205,14 +205,18 @@ commit, pull request) through the local `github-mcp-server` over stdio.
   is told to do it, up to `MAX_NUDGES` times; a reply that claims changes (`claimsChanges`:
   not negated, not about an earlier task) when the task changed no file and ran no
   command is questioned once, and if it still makes none the reply ends with a note that
-  the task didn't change any file. `MAX_AGENT_STEPS` is the only step limit.
+  the task didn't change any file. `MAX_AGENT_STEPS` is the only step limit; ending at it
+  mid-way adds a note saying so. `run_command` refuses commands that only read or list
+  files (`READS_FILES`), pointing to read_file, list_files and search.
 - **Agent mode ends with working code, on its own.** The root `AGENTS.md`, `CLAUDE.md`
   and `.github/copilot-instructions.md` go in the agent's system prompt, and a folder's
   own `AGENTS.md`/`CLAUDE.md` with the first file read or changed there (`Instructions`,
   within `instructionBudget`). After each edit the result lists the VS Code errors it
   added (`describeProblems`, against the file's errors before the task). When the model
   says it's done and the task changed files, the changed files are checked again and the
-  project check from `detectCheckCommand` runs; failures go back to the model up to
+  project check from `detectCheckCommand` runs (without one, or if you reject it, `syntaxCheckCommand` parses
+  the changed Python files, which runs no code and needs no card; JavaScript is left to
+  VS Code's own errors, as `node --check` misjudges JSX and Flow by Node version); failures go back to the model up to
   `MAX_VERIFY_ROUNDS` times, then the reply says they still fail. None of it needs a
   setting; the project check runs code the agent may have changed, so it asks once per
   task before its first run (rejecting skips it for that task), then runs on its own.

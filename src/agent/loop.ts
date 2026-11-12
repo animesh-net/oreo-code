@@ -3,7 +3,7 @@ import type { AgentStep, ModelInfo, ReasoningEffort } from '../shared/protocol';
 import type { Checkpoint } from './checkpoint';
 import { describeProblems, newProblems, type Problem } from './instructions';
 import { needsApproval } from './policy';
-import { MAX_VERIFY_ROUNDS } from './verify';
+import { COMMAND_NOT_FOUND, MAX_VERIFY_ROUNDS, syntaxCheckCommand } from './verify';
 import {
   applyWrite,
   COMMAND_TIMEOUT_MS,
@@ -175,10 +175,14 @@ export async function runAgent(deps: AgentDeps): Promise<AgentResult> {
   const check = { asked: false, allowed: false };
   let changesAtCheck = -1;
 
-  for (let n = 1; n <= max;) {
+  let n = 1;
+  /** The latest round's text, to tell whether the task ended mid-way at the step limit. */
+  let lastText = '';
+  for (; n <= max;) {
     const offered = n < max ? tools : undefined;
     question = deps.fit(deps.wire, question, current.info.maxPromptChars);
     let text = '';
+    lastText = '';
     let calls: ToolCall[] | undefined;
     let thinking = false;
     try {
@@ -215,6 +219,7 @@ export async function runAgent(deps: AgentDeps): Promise<AgentResult> {
       continue; // Same step again, on the Mac.
     }
     n++;
+    lastText = text;
     // The last round offers no tools; a call the model makes anyway isn't run.
     if (!offered) calls = undefined;
     if (!calls?.length) {
@@ -325,6 +330,11 @@ export async function runAgent(deps: AgentDeps): Promise<AgentResult> {
     reply += note;
     deps.onText(note);
   }
+  if (n > max && (!lastText.trim() || announcesAction(lastText))) {
+    const note = `\n\nStopped at the ${max}-step limit before finishing. Send "continue" to go on.`;
+    reply += note;
+    deps.onText(note);
+  }
   if (unresolved) {
     const note = `\n\nThe checks still fail, so this isn't working yet:\n\n${unresolved}`;
     reply += note;
@@ -399,6 +409,30 @@ async function verifyWork(
     if (deps.signal.aborted) throw abortError();
     if (!check.allowed) {
       step({ title: `Skipped the project check \`${deps.checkCommand}\` (rejected)`, outcome: 'rejected' });
+    }
+  }
+  // No project check, or you rejected it: at least parse the changed files. Parsing runs
+  // no code, so no card.
+  if (!deps.checkCommand || !check.allowed) {
+    const syntax = syntaxCheckCommand([...baseline.keys(), ...deps.checkpoint.files].filter(unique));
+    if (syntax) {
+      const result = await deps.workspace.runCommand(syntax, deps.signal);
+      if (deps.signal.aborted) throw abortError();
+      const missing = result.exitCode === COMMAND_NOT_FOUND;
+      const passed = missing || (!result.timedOut && result.exitCode === 0);
+      const output = keepEnds(result.output.trim(), MAX_COMMAND_OUTPUT_CHARS) || '(no output)';
+      step({
+        title: missing
+          ? 'Skipped the Python syntax check: python3 is not installed'
+          : `Checked the syntax of the changed Python files: ${passed ? 'passed' : 'failed'}`,
+        detail: clip(output),
+        outcome: passed ? 'ok' : 'error',
+      });
+      if (!passed) {
+        failures.push(
+          `Python couldn't parse a changed file:\n${output}\nIf this is valid syntax that this Python version doesn't know, say so instead of changing it.`,
+        );
+      }
     }
   }
   if (deps.checkCommand && check.allowed) {
@@ -489,6 +523,8 @@ export function malformedProblem(call: ToolCall, toolNames: ReadonlySet<string>)
   }
   return undefined;
 }
+
+const unique = (v: string, i: number, all: string[]) => all.indexOf(v) === i;
 
 function isJsonObject(text: string): boolean {
   try {
