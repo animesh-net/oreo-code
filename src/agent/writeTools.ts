@@ -694,7 +694,7 @@ export function makeDiff(path: string, before: string | undefined, after: string
 const BACKGROUND = /(^|[^&])&\s*$|\b(nohup|setsid|disown)\b/;
 
 /** Why the agent shouldn't start the app itself. */
-export const NO_SERVER_BY_COMMAND =
+const NO_SERVER_BY_COMMAND =
   "don't start the app or a server yourself: run_command waits for a command to end and stops it after 120 seconds, so a server started that way can't be reached. Finish your changes and say you're done: if the project has a start script, the app is then started for you, asked for /, and you're told what happened.";
 
 /** A command that only reads or lists files, with no pipe, redirect or chaining. */

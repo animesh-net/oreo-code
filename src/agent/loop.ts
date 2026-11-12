@@ -3,7 +3,7 @@ import type { AgentStep, ModelInfo, ReasoningEffort } from '../shared/protocol';
 import type { Checkpoint } from './checkpoint';
 import { describeProblems, newProblems, type Problem } from './instructions';
 import { needsApproval } from './policy';
-import { COMMAND_NOT_FOUND, MAX_VERIFY_ROUNDS, startsApp, syntaxCheckCommand } from './verify';
+import { appStartIn, COMMAND_NOT_FOUND, MAX_VERIFY_ROUNDS, syntaxCheckCommand } from './verify';
 import {
   applyWrite,
   COMMAND_TIMEOUT_MS,
@@ -11,7 +11,6 @@ import {
   isWriteTool,
   keepEnds,
   MAX_COMMAND_OUTPUT_CHARS,
-  NO_SERVER_BY_COMMAND,
   prepareWrite,
   WRITE_TOOLS,
   type PendingWrite,
@@ -24,6 +23,8 @@ import type { WritableWorkspace } from './writeTools';
  * model has to say what it did. Kept here only.
  */
 export const MAX_AGENT_STEPS = 15;
+/** More steps for each failed check sent back, so the model can fix what it found. */
+export const STEPS_PER_FIX = 6;
 /** How much of a tool's arguments and result each step shows in the chat. */
 export const MAX_STEP_DETAIL_CHARS = 2_000;
 
@@ -139,6 +140,8 @@ export interface AgentDeps {
   startCommand?: string;
   /** The app is a server: when started it must stay up and answer `/`. */
   startServes?: boolean;
+  /** The `start` script's command line, to know it when the model runs it. */
+  startScript?: string;
   maxSteps?: number;
 }
 
@@ -156,7 +159,8 @@ export interface AgentResult {
  * failure; on Stop the caller sees the abort.
  */
 export async function runAgent(deps: AgentDeps): Promise<AgentResult> {
-  const max = deps.maxSteps ?? MAX_AGENT_STEPS;
+  /** The step limit: MAX_AGENT_STEPS, plus STEPS_PER_FIX for each failed check sent back. */
+  let max = deps.maxSteps ?? MAX_AGENT_STEPS;
   const tools = [...deps.readTools, ...WRITE_TOOLS];
   const toolNames = new Set(tools.map((t) => t.function.name));
   const steps: AgentStep[] = [];
@@ -271,6 +275,7 @@ export async function runAgent(deps: AgentDeps): Promise<AgentResult> {
         break;
       }
       verifyRounds++;
+      max += STEPS_PER_FIX;
       unresolved = failure;
       deps.wire.push({ role: 'assistant', content: text });
       deps.wire.push({
@@ -502,10 +507,15 @@ async function runWrite(
   baseline: Map<string, Problem[]>,
   progress: { changes: number; commands: number },
 ): Promise<string> {
-  const prepared =
-    deps.startCommand && call.function.name === 'run_command' && startsApp(commandOf(call))
-      ? { error: `Error: ${NO_SERVER_BY_COMMAND}` }
-      : await prepareWrite(deps.workspace, call);
+  // A command that starts the app would block until stopped, or leave a server nobody
+  // can reach: run it the way the run check does, for a few seconds, and say what happened.
+  const smoke = deps.workspace.smokeRun?.bind(deps.workspace);
+  const appStart =
+    smoke && call.function.name === 'run_command' ? appStartIn(commandOf(call), deps.startScript) : undefined;
+  const prepared = await prepareWrite(
+    deps.workspace,
+    appStart ? { ...call, function: { ...call.function, arguments: JSON.stringify({ command: appStart }) } } : call,
+  );
   if ('error' in prepared) {
     const where = pathOf(call);
     step({
@@ -533,7 +543,12 @@ async function runWrite(
   }
   let result: string;
   try {
-    result = await applyWrite(deps.workspace, pending, deps.signal, (e) => deps.checkpoint.remember(e));
+    if (appStart && smoke) {
+      const run = await smoke(appStart, deps.signal, deps.startServes ?? false);
+      result = `${run.ok ? '' : 'Error: '}Started \`${appStart}\` for a few seconds, then stopped it: it ${run.summary}.\n${run.output}`;
+    } else {
+      result = await applyWrite(deps.workspace, pending, deps.signal, (e) => deps.checkpoint.remember(e));
+    }
   } catch (err) {
     result = `Error: ${(err as Error).message}`;
   }

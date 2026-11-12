@@ -105,3 +105,35 @@ export function expectsServer(task: string, packageJson: string | undefined): bo
 export function startsApp(command: string): boolean {
   return /^\s*(npm|pnpm|yarn|bun)\s+(run\s+)?start\s*$/.test(command);
 }
+
+/** The `start` script's own command line (`node server/index.js`), to know it when the model runs it. */
+export function startScript(packageJson: string | undefined): string | undefined {
+  if (packageJson === undefined) return undefined;
+  try {
+    const start = (JSON.parse(packageJson) as { scripts?: Record<string, unknown> }).scripts?.start;
+    return typeof start === 'string' ? start.trim() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Endings that don't change what a command starts: `&`, `2>&1`, `|| true`, `; true`. */
+const NOISE_AT_END = /\s*(&|2>&1|\|\|\s*true|;\s*true)\s*$/;
+
+/**
+ * The app start inside a command the model ran to start it (`npm start &`, `nohup node
+ * server/index.js 2>&1 || true`), or undefined if the command does something else. Such a
+ * command would block until stopped, or leave a server nobody can reach.
+ */
+export function appStartIn(command: string, script: string | undefined): string | undefined {
+  let rest = command.trim();
+  const background = /(^|[^&])&\s*$/.test(rest) || /^nohup\s/.test(rest);
+  rest = rest.replace(/^nohup\s+/, '');
+  for (let before = ''; before !== rest;) {
+    before = rest;
+    rest = rest.replace(NOISE_AT_END, '');
+  }
+  if (!rest || /[;&|<>`$]/.test(rest)) return undefined;
+  if (background || startsApp(rest) || (script !== undefined && rest === script)) return rest;
+  return undefined;
+}

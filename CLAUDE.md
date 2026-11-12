@@ -213,8 +213,8 @@ commit, pull request) through the local `github-mcp-server` over stdio.
   up to `MAX_REWRITE_CHARS`, refusing "rest unchanged" placeholders) become an `edit_file`
   of the whole file, so they share its approval, `runsCode`, Undo and error checks: small
   models like Oreo 4B can't reliably copy exact text. Agent calls use `AGENT_TEMPERATURE`
-  (0.2) for steadier tool calls. `MAX_AGENT_STEPS` is the only step limit; ending at it
-  mid-way adds a note saying so. `run_command` refuses commands that only read or list
+  (0.2) for steadier tool calls. The step limit is `MAX_AGENT_STEPS`, plus `STEPS_PER_FIX`
+  for each failed check sent back; ending at it mid-way adds a note saying so. `run_command` refuses commands that only read or list
   files (`READS_FILES`), pointing to read_file, list_files and search.
 - **Agent mode ends with working code, on its own.** The root `AGENTS.md`, `CLAUDE.md`
   and `.github/copilot-instructions.md` go in the agent's system prompt, and a folder's
@@ -231,9 +231,11 @@ commit, pull request) through the local `github-mcp-server` over stdio.
   `PORT`, asks for `/` on the port it prints, and fails on a crash, a non-zero exit, a 5xx
   answer or no answer; for a server (`expectsServer`: the task is about serving or the
   project depends on a server framework) exiting at once or nothing answering on its port
-  fails too. `run_command` refuses background commands (`&`, `nohup`) and `npm start`
-  (`startsApp`), since it waits for a command and a server started that way can't be
-  reached. The process group is killed after. Failures go back to the model up to
+  fails too. The process group is killed after. A `run_command` that starts the app
+  (`appStartIn`: `npm start`, the start script itself, or anything sent to the background
+  with `&` or `nohup`, under endings like `2>&1 || true`) runs the same way instead, after
+  its approval card, since a command must end and a server started in the background
+  can't be reached; without `smokeRun`, background commands are refused. Failures go back to the model up to
   `MAX_VERIFY_ROUNDS` times, then the reply says they still fail. None of it needs a
   setting; the project check and starting the app run code the agent may have changed, so
   each asks once per task before its first run (rejecting skips it for that task), then

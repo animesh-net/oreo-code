@@ -22,7 +22,7 @@ const AGENT_RULES = [
   '- Read files with read_file, list them with list_files and find text with search; never with cat, head, tail, ls or grep in run_command.',
   '- Never create, change or delete files with run_command (no "cat >", "echo >", heredocs, "rm" or "mv"): only edit_file and create_file changes are checked for errors and can be undone.',
   "- Use run_command to build or test, e.g. the project's test command, and fix what fails. Commands run in the repository root.",
-  '- Don\'t start the app or a server with run_command (no "npm start", no "&"): when you say you\'re done, a project with a start script is started for you and you\'re told if it crashed or didn\'t answer. A server must call listen and stay running.',
+  "- To see the app run, use run_command with its start command (e.g. npm start), never with \"&\": it runs for a few seconds, is asked for /, then stopped, and you're told if it crashed or didn't answer. It's also done for you when you say you're done. A server must call listen and stay running.",
   "- Follow the repository's instructions (AGENTS.md, CLAUDE.md and the like), shown below and with files from folders that have their own; they decide conventions, style and checks.",
   '- After each change, its result lists any errors it added; fix them before going on.',
   "- When you say you're done, the changed files are checked for errors and the project's check is run; the task must end with working code.",

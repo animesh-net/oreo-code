@@ -5,6 +5,7 @@ import { describeProblems, Instructions, newProblems, type Problem } from '../sr
 import {
   detectCheckCommand,
   detectStartCommand,
+  appStartIn,
   expectsServer,
   startsApp,
   syntaxCheckCommand,
@@ -877,6 +878,18 @@ describe('repository instructions and checks', () => {
     expect(startsApp('yarn run start')).toBe(true);
     expect(startsApp('npm run start:prod')).toBe(false);
     expect(startsApp('npm test')).toBe(false);
+  });
+
+  it('knows a command that starts the app, under the noise models add', () => {
+    const script = 'node server/index.js';
+    expect(appStartIn('npm start &', script)).toBe('npm start');
+    expect(appStartIn('npm run start', undefined)).toBe('npm run start');
+    expect(appStartIn('node server/index.js 2>&1 || true', script)).toBe('node server/index.js');
+    expect(appStartIn('nohup node other.js &', script)).toBe('node other.js');
+    expect(appStartIn('node other.js', script)).toBeUndefined();
+    expect(appStartIn('npm test', script)).toBeUndefined();
+    expect(appStartIn('pkill node; npm start &', script)).toBeUndefined();
+    expect(appStartIn('sleep 2 && curl localhost:3597', script)).toBeUndefined();
   });
 
   it('shows a change the errors it added, so the model fixes them', async () => {

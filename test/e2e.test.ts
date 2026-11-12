@@ -151,33 +151,44 @@ describe('agent mode end to end, on disk', () => {
     expect(await fixture('broken-server').verify(ws)).toMatchObject({ passed: true });
   }, 30_000);
 
-  it('sends back a server fix that never listens, and the model starting it itself', async () => {
+  it('runs the app when the model starts it itself, and gives more steps to fix what the check found', async () => {
     const ws = await workspace('broken-server');
-    // What Oreo 4B did in the eval: a fix that parses but never calls listen, so
-    // `npm start` exits at once; then trying to start the server by hand.
+    // What Oreo 4B did in the eval: a fix that never calls listen, starting the server by
+    // hand with "&" and with the start script itself, then a fix that crashes on import.
     const noListen = FIXED_SERVER_JS.replace(
       /createServer\(serve\)\.listen[^\n]*/,
       'export const server = createServer(serve);',
     );
+    const badImport = FIXED_SERVER_JS.replace(
+      "import fs from 'fs/promises';",
+      "import { existsSync, readFile } from 'fs/promises';\nconst fs = { readFile };",
+    );
     const { client, sent } = scripted([
       [call('read_file', { path: 'server/index.js' })],
       [call('write_file', { path: 'server/index.js', content: noListen })],
-      [call('run_command', { command: 'npm start &' })], // refused
-      [call('run_command', { command: 'npm start' })], // refused too: it would block until stopped
-      'Fixed the server.', // started: exits at once, sent back
+      [call('run_command', { command: 'npm start &' })], // run for a few seconds: exits at once
+      [call('write_file', { path: 'server/index.js', content: badImport })],
+      [call('run_command', { command: 'node server/index.js 2>&1 || true' })], // the start script: crashes
+      'Fixed the server.', // the run check finds the crash and sends it back
+      ...Array.from({ length: 12 }, () => [call('read_file', { path: 'package.json' })]), // past the 15 steps
       [call('write_file', { path: 'server/index.js', content: FIXED_SERVER_JS })],
-      'Added the listen call.',
+      'Imported fs/promises as a whole again.',
     ]);
     const run = await runTask({ ws, client, modelId: 'oreo-4b', task: fixture('broken-server').task });
 
     expect(run.error).toBeUndefined();
-    expect(sent[3].at(-1)?.content).toMatch(/don't start the app or a server yourself/);
-    expect(sent[4].at(-1)?.content).toMatch(/don't start the app or a server yourself/);
-    expect(sent[5].at(-1)?.content).toMatch(/exited at once \(exit 0\) instead of staying up/);
-    expect(run.approvals).toEqual(['Run npm start']); // only the run check's own start
+    expect(sent[3].at(-1)?.content).toMatch(
+      /^Error: Started `npm start` for a few seconds, then stopped it: it exited at once/,
+    );
+    expect(sent[5].at(-1)?.content).toMatch(
+      /^Error: Started `node server\/index\.js` for a few seconds[\s\S]*existsSync/,
+    );
+    expect(sent[6].at(-1)?.content).toMatch(/Starting the app with `npm start` failed: it crashed/);
+    // Approved: the two starts by hand, then the run check's own once.
+    expect(run.approvals).toEqual(['Run npm start', 'Run node server/index.js', 'Run npm start']);
     expect(run.steps.at(-1)?.title).toMatch(/GET \/ answered 200/);
     expect(await fixture('broken-server').verify(ws)).toMatchObject({ passed: true });
-  }, 30_000);
+  }, 60_000);
 
   it("doesn't let a fix that leaves the file broken end the task", async () => {
     const ws = await workspace('broken-server');

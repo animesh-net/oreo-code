@@ -1,5 +1,5 @@
 import { Instructions } from '../agent/instructions';
-import { detectCheckCommand, detectStartCommand, expectsServer } from '../agent/verify';
+import { detectCheckCommand, detectStartCommand, expectsServer, startScript } from '../agent/verify';
 import { Checkpoint } from '../agent/checkpoint';
 import { FIND_SYMBOL_TOOL, runFindSymbol } from '../agent/findSymbol';
 import { runAgent, type AgentModel } from '../agent/loop';
@@ -157,7 +157,12 @@ export function instructionBudget(maxPromptChars = MAX_PROMPT_CHARS): number {
 async function findCheckCommand(
   ws: WritableWorkspace,
   task: string,
-): Promise<{ checkCommand: string | undefined; startCommand: string | undefined; startServes: boolean }> {
+): Promise<{
+  checkCommand: string | undefined;
+  startCommand: string | undefined;
+  startServes: boolean;
+  startScript: string | undefined;
+}> {
   try {
     const files = await ws.listFiles();
     const packageJson = files.includes('package.json') ? await ws.readFile('package.json') : undefined;
@@ -165,9 +170,10 @@ async function findCheckCommand(
       checkCommand: detectCheckCommand(files, packageJson),
       startCommand: detectStartCommand(files, packageJson),
       startServes: expectsServer(task, packageJson),
+      startScript: startScript(packageJson),
     };
   } catch {
-    return { checkCommand: undefined, startCommand: undefined, startServes: false };
+    return { checkCommand: undefined, startCommand: undefined, startServes: false, startScript: undefined };
   }
 }
 
@@ -533,7 +539,7 @@ export class ChatController {
     // The repository's instruction files and its check run on their own, nothing to set up.
     const instructions = new Instructions(ws, instructionBudget(model.info.maxPromptChars));
     const task = [...history].reverse().find((m) => m.role === 'user')?.content ?? '';
-    const [rootInstructions, { checkCommand, startCommand, startServes }] = await Promise.all([
+    const [rootInstructions, { checkCommand, startCommand, startServes, startScript: script }] = await Promise.all([
       instructions.root(),
       findCheckCommand(ws, task),
     ]);
@@ -568,6 +574,7 @@ export class ChatController {
       checkCommand,
       startCommand,
       startServes,
+      startScript: script,
     });
   }
 
