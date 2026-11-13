@@ -1,6 +1,7 @@
 import type { FunctionTool, ModelClient, ToolCall, WireMessage } from '../ollama/client';
 import type { AgentStep, ModelInfo, ReasoningEffort } from '../shared/protocol';
 import type { Checkpoint } from './checkpoint';
+import { failureSite, linesAround } from './failureSite';
 import { latestCopyNote, numberedCopy, retireCopies } from './fileViews';
 import { describeProblems, newProblems, type Problem } from './instructions';
 import { needsApproval } from './policy';
@@ -188,6 +189,8 @@ export async function runAgent(deps: AgentDeps): Promise<AgentResult> {
   /** The same for starting the app. */
   const start = { asked: false, allowed: false };
   let changesAtCheck = -1;
+  /** The failing lines of the latest failure that named one, for a rewrite that changed nothing. */
+  const hint: Hint = {};
   /** Each file as the model last saw it whole or in part (read, or after its own edit). */
   const views = new Map<string, string>();
 
@@ -261,7 +264,7 @@ export async function runAgent(deps: AgentDeps): Promise<AgentResult> {
       // failure not its own (e.g. already broken before the task). Report it and stop.
       if (progress.changes === changesAtCheck) break;
       changesAtCheck = progress.changes;
-      const failure = await verifyWork(deps, baseline, step, check, start);
+      const failure = await verifyWork(deps, baseline, step, check, start, hint);
       if (!failure) {
         unresolved = undefined;
         break;
@@ -304,7 +307,7 @@ export async function runAgent(deps: AgentDeps): Promise<AgentResult> {
       let result: string;
       try {
         result = isWriteTool(call.function.name)
-          ? await runWrite(deps, call, step, baseline, progress, views)
+          ? await runWrite(deps, call, step, baseline, progress, views, hint)
           : await runRead(deps, call, step, views);
       } catch (err) {
         if (deps.signal.aborted) throw err;
@@ -410,6 +413,7 @@ async function verifyWork(
   step: (s: AgentStep) => void,
   check: { asked: boolean; allowed: boolean },
   start: { asked: boolean; allowed: boolean },
+  hint: Hint,
 ): Promise<string | undefined> {
   const failures: string[] = [];
   if (deps.problems) {
@@ -481,7 +485,11 @@ async function verifyWork(
       detail: clip(output),
       outcome: passed ? 'ok' : 'error',
     });
-    if (!passed) failures.push(`The project check \`${deps.checkCommand}\` failed (${status}):\n${output}`);
+    if (!passed) {
+      failures.push(
+        `The project check \`${deps.checkCommand}\` failed (${status}):\n${output}${await pointAt(deps, output, hint)}`,
+      );
+    }
   }
   // Code that parses and passes its checks can still crash when it runs: start the app
   // for a few seconds. It runs your code, so like the check it asks once per task.
@@ -503,7 +511,9 @@ async function verifyWork(
         outcome: run.ok ? 'ok' : 'error',
       });
       if (!run.ok)
-        failures.push(`Starting the app with \`${deps.startCommand}\` failed: it ${run.summary}.\n${run.output}`);
+        failures.push(
+          `Starting the app with \`${deps.startCommand}\` failed: it ${run.summary}.\n${run.output}${await pointAt(deps, run.output, hint)}`,
+        );
     }
   }
   return failures.length ? failures.join('\n\n') : undefined;
@@ -516,6 +526,7 @@ async function runWrite(
   baseline: Map<string, Problem[]>,
   progress: { changes: number; commands: number },
   seen: Map<string, string>,
+  hint: Hint,
 ): Promise<string> {
   // Line numbers and whole-file rewrites only make sense against the file as it is now:
   // one that changed since the model saw it (a command, or you) is shown again first.
@@ -538,6 +549,10 @@ async function runWrite(
     appStart ? { ...call, function: { ...call.function, arguments: JSON.stringify({ command: appStart }) } } : call,
   );
   if ('error' in prepared) {
+    // A rewrite that changes nothing means the model can't see what's wrong: show it again.
+    if (prepared.error.includes('nothing changed') && hint.site) {
+      prepared.error += await showSite(deps, hint.site.path, hint.site.line);
+    }
     const where = pathOf(call);
     step({
       title: `Couldn't ${call.function.name.replace('_', ' ')}${where ? ` ${where}` : ''}`,
@@ -567,6 +582,7 @@ async function runWrite(
     if (appStart && smoke) {
       const run = await smoke(appStart, deps.signal, deps.startServes ?? false);
       result = `${run.ok ? '' : 'Error: '}Started \`${appStart}\` for a few seconds, then stopped it: it ${run.summary}.\n${run.output}`;
+      if (!run.ok) result += await pointAt(deps, run.output, hint);
     } else {
       result = await applyWrite(deps.workspace, pending, deps.signal, (e) => deps.checkpoint.remember(e));
     }
@@ -574,7 +590,10 @@ async function runWrite(
     result = `Error: ${(err as Error).message}`;
   }
   if (deps.signal.aborted) throw abortError();
-  if (pending.kind === 'run_command') progress.commands++;
+  if (pending.kind === 'run_command') {
+    progress.commands++;
+    if (!appStart && !/^Exit code 0\./.test(result)) result += await pointAt(deps, result, hint);
+  }
   if (path && !result.startsWith('Error')) {
     progress.changes++;
     if (deps.problems) {
@@ -667,4 +686,33 @@ async function staleView(deps: AgentDeps, call: ToolCall, seen: Map<string, stri
   return copy
     ? `Error: ${why}, so your line numbers or text may not match it. Nothing was changed. Here is its latest copy; make the change against it:\n${copy}`
     : `Error: ${why}. Nothing was changed. Read it with read_file, then make the change against what you read.`;
+}
+
+/** The latest failure's place in the repository's code, for a rewrite that then changes nothing. */
+interface Hint {
+  site?: { path: string; line: number };
+}
+
+/**
+ * The numbered lines where `output` says the code failed, if it names a line of a file
+ * in the repository (`src/agent/failureSite.ts`), else "". Remembered in `hint`.
+ */
+async function pointAt(deps: AgentDeps, output: string, hint: Hint): Promise<string> {
+  try {
+    const site = failureSite(output, await deps.workspace.listFiles());
+    if (!site) return '';
+    hint.site = site;
+    return await showSite(deps, site.path, site.line);
+  } catch {
+    return '';
+  }
+}
+
+/** The file's lines around `line` as it is now, or "" if it can't be read. */
+async function showSite(deps: AgentDeps, path: string, line: number): Promise<string> {
+  try {
+    return `\n\n${linesAround(path, await deps.workspace.readFile(path), line)}`;
+  } catch {
+    return '';
+  }
 }

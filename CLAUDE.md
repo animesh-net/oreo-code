@@ -127,6 +127,7 @@ commit, pull request) through the local `github-mcp-server` over stdio.
 | `src/agent/checkpoint.ts`           | "Undo task": each changed file's text from before the task, in memory                                                      |
 | `src/agent/instructions.ts`         | The repository's instruction files for the agent, and the errors a change added                                            |
 | `src/agent/verify.ts`               | The project check and start command found from its files, run when the agent says it's done                                |
+| `src/agent/failureSite.ts`          | The failing line in the repository's code from a check's or run's output, shown numbered to the model                      |
 | `src/agent/smoke.ts`                | Starts the app for a few seconds to see it runs and answers `/`                                                            |
 | `src/agent/findSymbol.ts`           | Read-only `find_symbol` over the completion symbol index                                                                   |
 | `src/agent/workspaceTools.ts`       | Read-only workspace tools (list, read, search); secret files refused                                                       |
@@ -249,7 +250,12 @@ commit, pull request) through the local `github-mcp-server` over stdio.
   with `&` or `nohup`, under endings like `2>&1 || true`) runs the same way instead, after
   its approval card, since a command must end and a server started in the background
   can't be reached; without `smokeRun`, background commands are refused. Failures go back to the model up to
-  `MAX_VERIFY_ROUNDS` times, then the reply says they still fail. None of it needs a
+  `MAX_VERIFY_ROUNDS` times, then the reply says they still fail. When a failed check, app
+  start or command names a line of a file in the repository (`failureSite`: Node's
+  `file:line` above a SyntaxError, the first stack frame outside `node_modules` and Node,
+  Python's `File "…", line N`), the message ends with those lines numbered and the failing
+  one marked (`linesAround`); a rewrite that then changes nothing gets them again, read
+  fresh. None of it needs a
   setting; the project check and starting the app run code the agent may have changed, so
   each asks once per task before its first run (rejecting skips it for that task), then
   runs on its own.

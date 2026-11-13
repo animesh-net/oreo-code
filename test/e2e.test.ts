@@ -220,6 +220,35 @@ describe('agent mode end to end, on disk', () => {
     expect(await fixture('broken-server').verify(ws)).toMatchObject({ passed: true });
   }, 30_000);
 
+  it('shows the failing lines when the app crashes, and again when the model rewrites the file unchanged', async () => {
+    const ws = await workspace('broken-server');
+    // Parses, but crashes on start: the server is never defined.
+    const crashes = FIXED_SERVER_JS.replace(
+      /createServer\(serve\)\.listen[^\n]*/,
+      'server.listen(PORT, () => console.log(`Listening on ${PORT}`));',
+    );
+    const crashLine = crashes.split('\n').findIndex((l) => l.startsWith('server.listen')) + 1;
+    const { client, sent } = scripted([
+      [call('read_file', { path: 'server/index.js' })],
+      [call('write_file', { path: 'server/index.js', content: crashes })],
+      'Fixed the server.', // the run check: crashed, with the failing line shown
+      [call('write_file', { path: 'server/index.js', content: crashes })], // the same text again
+      [call('write_file', { path: 'server/index.js', content: FIXED_SERVER_JS })],
+      'Started the server with createServer.',
+    ]);
+    const run = await runTask({ ws, client, modelId: 'oreo-4b', task: fixture('broken-server').task });
+
+    expect(run.error).toBeUndefined();
+    const failed = sent[3].at(-1)?.content ?? '';
+    expect(failed).toMatch(/Starting the app with `npm start` failed: it crashed/);
+    expect(failed).toContain(`It fails at line ${crashLine} of server/index.js:\n`);
+    expect(failed).toContain(`> ${crashLine}: server.listen(PORT`);
+    const unchanged = sent[4].at(-1)?.content ?? '';
+    expect(unchanged).toMatch(/^Error: that is exactly what server\/index\.js already has, so nothing changed/);
+    expect(unchanged).toContain(`> ${crashLine}: server.listen(PORT`);
+    expect(await fixture('broken-server').verify(ws)).toMatchObject({ passed: true });
+  }, 30_000);
+
   it("doesn't let a fix that leaves the file broken end the task", async () => {
     const ws = await workspace('broken-server');
     const { client, sent } = scripted([
