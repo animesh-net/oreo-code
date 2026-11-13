@@ -268,8 +268,9 @@ commit, pull request) through the local `github-mcp-server` over stdio.
 - **Packaging.** `@types/vscode` must not be newer than `engines.vscode`; raise
   both together. `.vscodeignore` ships only `dist/`, `media/`, `package.json`,
   `README.md` and `LICENSE`.
-- Keep the README short: architecture and how to run it. Install steps and
-  only the settings needed to run go in its Run it section.
+- Keep the README short and for developers: how the tool works in a few bullets, its
+  prerequisites, the install command, screenshots (`media/screenshots/`) and how to
+  develop. Detail on behaviour, settings and code belongs here, not in the README.
 
 ## Checks
 
