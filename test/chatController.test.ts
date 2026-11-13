@@ -241,6 +241,36 @@ describe('ChatController', () => {
     });
   });
 
+  it('compacts a chat that fills the context window, and starts later turns from the summary', async () => {
+    const sent: ChatMessage[][] = [];
+    let summaries = 0;
+    const { controller, posted } = setup(
+      fakeClient((messages) => {
+        if (messages.at(-1)?.content.startsWith('Summarize this conversation')) {
+          summaries++;
+          return chunks('They asked about A, B and C.');
+        }
+        sent.push(messages);
+        return chunks('ok');
+      }),
+    );
+    await controller.refresh();
+    for (const c of ['A', 'B', 'C', 'D']) await controller.handle({ type: 'send', text: c.repeat(20_000) });
+    expect(summaries).toBe(1);
+    expect(sent[3][0].content).toMatch(
+      /^Summary of the conversation so far[\s\S]*They asked about A, B and C\.\n\nFile contents/,
+    );
+    expect(sent[3].slice(1)).toEqual([{ role: 'user', content: 'D'.repeat(20_000) }]);
+    expect(posted).toContainEqual({ type: 'activity', text: 'Compacted the conversation to fit the context window' });
+    // You still see the whole chat; the next turn goes on from the summary without a new one.
+    expect(controller.state.messages).toHaveLength(8);
+    await controller.handle({ type: 'send', text: 'and now?' });
+    expect(summaries).toBe(1);
+    expect(sent[4].map((m) => m.content.slice(0, 20))).toEqual(
+      ['Summary of the conver', 'D'.repeat(20), 'ok', 'and now?'].map((s) => s.slice(0, 20)),
+    );
+  });
+
   it('drops a failed turn and returns the text to the input', async () => {
     const { controller, posted } = setup(
       fakeClient(async function* () {

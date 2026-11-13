@@ -1451,6 +1451,35 @@ describe('edits a small model can make', () => {
     expect(JSON.parse(rewrite?.function.arguments ?? '{}')).toEqual({ path: 'a.js', note: 'older copy removed' });
   });
 
+  it('compacts with the model in use, shows a step and has the model read files again', async () => {
+    const ws = memoryWorkspace({ 'a.js': 'one();\ntwo();\n' });
+    ws.runCommand = async () => {
+      ws.files['a.js'] = '// formatted\none();\ntwo();\n';
+      return { exitCode: 0, output: '', timedOut: false };
+    };
+    const client = scripted([
+      [call('read_file', { path: 'a.js' })],
+      [call('run_command', { command: 'npm run format' }, 'c2')],
+      // After compacting, the model's copy is gone: an edit isn't checked against it.
+      [call('replace_lines', { path: 'a.js', start_line: 3, end_line: 3, new_text: 'TWO();' }, 'c3')],
+      'Done.',
+    ]);
+    const compacted: string[] = [];
+    const d = deps(client, ws, {
+      approveEdits: () => true,
+      compact: async (wire, question, model) => {
+        if (wire.length < 6) return undefined;
+        compacted.push(model.info.id);
+        wire.splice(1, question - 1);
+        return 1;
+      },
+    });
+    await runAgent(d);
+    expect(compacted).toEqual([d.model.info.id, d.model.info.id]);
+    expect(d.steps.map((s) => s.title)).toContain('Compacted the conversation to fit the context window');
+    expect(ws.files['a.js']).toBe('// formatted\none();\nTWO();\n');
+  });
+
   it('shows the latest copy instead of editing a file that changed since the agent saw it', async () => {
     const ws = memoryWorkspace({ 'a.js': 'one();\ntwo();\n' });
     ws.runCommand = async () => {

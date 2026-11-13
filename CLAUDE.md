@@ -203,7 +203,14 @@ commit, pull request) through the local `github-mcp-server` over stdio.
   "Undo task" can restore it; undo leaves a file alone if it changed after the task
   wrote it, and a task that changes nothing keeps the last task's undo, as does New chat.
   Commands run with `commandEnv`: your environment without VS Code's `ELECTRON_RUN_AS_NODE` and `VSCODE_*`. `fitToContext`
-  counts tool-call arguments and trims those of calls already made. A tool that fails goes back to the model as an error; the task goes on. Calls get unique ids, unparseable
+  counts tool-call arguments and trims those of calls already made. Before it, `compactWire`
+  (`src/chat/compact.ts`) replaces the earlier conversation with a summary from the model in
+  use once the prompt reaches `COMPACT_AT` (95%) of `maxPromptChars`, in chat and agent mode
+  alike: the system prompt, the current question and the newest messages (never starting on
+  a tool result) stay; the summary is kept for later turns of the chat until New chat; a
+  summary that fails or comes back empty leaves the prompt to `fitToContext`, and Stop still
+  stops. The summary message tells the model to read a file again before changing it, and the
+  agent's record of the files it saw is cleared, since those copies are gone. A tool that fails goes back to the model as an error; the task goes on. Calls get unique ids, unparseable
   arguments are replaced with `{}` in the conversation, and the last round (no tools offered) runs no calls.
   A reply that only announces a next step (`announcesAction`) is not an answer: the model
   is told to do it, up to `MAX_NUDGES` times; a reply that claims changes (`claimsChanges`:

@@ -8,6 +8,7 @@ import { runWorkspaceTool, WORKSPACE_TOOLS, type Workspace } from '../agent/work
 import type { CodeSymbol } from '../completion/symbols';
 import type { ModelClient, ToolCall, WireMessage } from '../ollama/client';
 import { buildSystemPrompt } from './context';
+import { compactWire, summaryMessage } from './compact';
 import { cloudModels } from '../cloudflare/client';
 import { describeCloudflareError, isCloudLimitError } from '../cloudflare/errors';
 import { describeOllamaError, isUnreachable } from '../ollama/errors';
@@ -123,6 +124,17 @@ export function fitToContext(wire: WireMessage[], question: number, max = MAX_PR
   return question;
 }
 
+/** Compacts a prompt that's nearly full; returns the question's new index, or undefined. */
+type Compactor = (
+  wire: WireMessage[],
+  question: number,
+  client: ModelClient,
+  model: string,
+  max: number,
+) => Promise<number | undefined>;
+
+const COMPACTED = 'Compacted the conversation to fit the context window';
+
 /** Tool-call arguments up to this length are kept when trimming. */
 const SHORT_ARGUMENTS = 300;
 
@@ -199,6 +211,8 @@ export class ChatController {
   private approvalSeq = 0;
   /** Bumped by New chat, so a task stopped by it doesn't write into the new chat. */
   private chatId = 0;
+  /** The summary that stands in for the chat's first `upTo` messages once it was compacted. */
+  private compacted?: { upTo: number; summary: string };
   /** What the last agent task changed, for "Undo task". */
   private checkpoint: Checkpoint | undefined;
 
@@ -366,6 +380,7 @@ export class ChatController {
     this.chatId++;
     this.abort?.abort();
     this.messages = [];
+    this.compacted = undefined;
     this.error = undefined;
     // The last task's undo stays: its files are still changed, whatever chat is open.
     this.publish();
@@ -425,7 +440,8 @@ export class ChatController {
     const writable = this.agentMode && info?.supportsTools ? this.deps.getWritableWorkspace?.() : undefined;
     try {
       if (writable && info) {
-        const result = await this.runAgentTask(writable, { client, info }, history, abort.signal, {
+        const compact = this.compactor(chat, turnStart, abort.signal);
+        const result = await this.runAgentTask(writable, { client, info }, history, abort.signal, compact, {
           onText: (delta) => {
             reply += delta;
             this.deps.post({ type: 'delta', text: delta });
@@ -448,14 +464,21 @@ export class ChatController {
       const tools = info?.supportsTools && workspace ? WORKSPACE_TOOLS : undefined;
       const wire: WireMessage[] = [
         { role: 'system', content: await buildSystemPrompt(workspace, !!tools) },
-        ...historyToWire(history),
+        ...this.historyWire(history),
       ];
+      const compact = this.compactor(chat, turnStart, abort.signal);
       let question = wire.length - 1;
       for (let round = 1; round <= MAX_TOOL_ROUNDS; round++) {
         let text = '';
         let calls: ToolCall[] | undefined;
         const offered = tools && round < MAX_TOOL_ROUNDS ? tools : undefined;
         let thinking = false;
+        const compacted = await compact(wire, question, client, model, info?.maxPromptChars ?? MAX_PROMPT_CHARS);
+        if (compacted !== undefined) {
+          question = compacted;
+          activity.push(COMPACTED);
+          this.deps.post({ type: 'activity', text: COMPACTED });
+        }
         question = fitToContext(wire, question, info?.maxPromptChars);
         for await (const event of client.streamChat(model, wire, abort.signal, this.effort, offered)) {
           if (event.type === 'toolCalls') {
@@ -529,6 +552,7 @@ export class ChatController {
     model: AgentModel,
     history: ChatMessage[],
     signal: AbortSignal,
+    compact: Compactor,
     on: { onText(delta: string): void; onStep(step: AgentStep): void; onMove(model: ModelInfo): void },
   ) {
     // Replaces the last task's undo only once this task changes a file.
@@ -545,7 +569,7 @@ export class ChatController {
     ]);
     const wire: WireMessage[] = [
       { role: 'system', content: await buildSystemPrompt(ws, true, true, rootInstructions) },
-      ...historyToWire(history),
+      ...this.historyWire(history),
     ];
     return runAgent({
       model,
@@ -554,6 +578,8 @@ export class ChatController {
       wire,
       question: wire.length - 1,
       fit: fitToContext,
+      compact: (w, question, current) =>
+        compact(w, question, current.client, current.info.id, current.info.maxPromptChars),
       effort: this.effort,
       signal,
       readTools: findSymbol ? [...WORKSPACE_TOOLS, FIND_SYMBOL_TOOL] : WORKSPACE_TOOLS,
@@ -576,6 +602,39 @@ export class ChatController {
       startServes,
       startScript: script,
     });
+  }
+
+  /** The chat as sent to the model: the summary of a compacted beginning, then the rest. */
+  private historyWire(history: ChatMessage[]): WireMessage[] {
+    const c = this.compacted;
+    if (!c || c.upTo > history.length) return historyToWire(history);
+    return [summaryMessage(c.summary), ...historyToWire(history.slice(c.upTo))];
+  }
+
+  /**
+   * Compacts a turn's prompt once it's nearly full (src/chat/compact.ts), summarizing with
+   * the model in use, and keeps the summary for later turns of the same chat. A summary
+   * that fails leaves the prompt to fitToContext's trimming; Stop still stops.
+   */
+  private compactor(chat: number, turnStart: number, signal: AbortSignal): Compactor {
+    return async (wire, question, client, model, max) => {
+      let result;
+      try {
+        result = await compactWire(wire, question, max, async (messages) => {
+          let text = '';
+          for await (const event of client.streamChat(model, messages, signal, 'none')) {
+            if (event.type === 'text') text += event.text;
+          }
+          return text;
+        });
+      } catch (err) {
+        if (signal.aborted) throw err;
+        return undefined;
+      }
+      if (!result) return undefined;
+      if (this.chatId === chat) this.compacted = { upTo: turnStart, summary: result.summary };
+      return result.question;
+    };
   }
 
   /** The Mac model with tools ranked first, if Ollama has it: where agent mode goes when Cloudflare's limit is hit. */
