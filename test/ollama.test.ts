@@ -130,6 +130,20 @@ describe('models from Ollama', () => {
     expect(() => tagsFrom({ data: [] })).toThrow(/unexpected model list/);
   });
 
+  it("leaves out Ollama's cloud models, which don't run on the Mac", () => {
+    expect(
+      tagsFrom({
+        models: [
+          { name: 'oreo-4b:latest' },
+          { name: 'gemma4:31b-cloud' },
+          { name: 'gpt-oss:120b-cloud', remote_model: 'gpt-oss:120b', remote_host: 'https://ollama.com:443' },
+          { name: 'renamed', remote_host: 'https://ollama.com:443' },
+          { name: 'qwen3-coder:cloud' },
+        ],
+      }).map((t) => t.name),
+    ).toEqual(['oreo-4b:latest']);
+  });
+
   it('picks the largest model with tools by default, and the smallest coder for completion', async () => {
     const { fetchImpl } = fakeOllama(Object.keys(SHOW));
     const models = await new OllamaClient(ollama, fetchImpl).listModels();
@@ -138,6 +152,49 @@ describe('models from Ollama', () => {
     expect(defaultModel(models.filter((m) => !m.supportsTools))?.id).toBe('qwen3.5:2b');
     expect(completionModel(models)?.id).toBe('qwen2.5-coder:1.5b-base');
     expect(completionModel(models.filter((m) => !m.completion))).toBeUndefined();
+  });
+});
+
+describe('the Mac as it is', () => {
+  it('lists the local models from `ollama list`, picks a 4B with tools and a 1.5B coder, and leaves the cloud one out', async () => {
+    const qwen4: ShowResponse = { ...SHOW['qwen3.5:4b'], details: { family: 'qwen35', parameter_size: '4.7B' } };
+    const qwen2: ShowResponse = { ...SHOW['qwen3.5:2b'], details: { family: 'qwen35', parameter_size: '2.3B' } };
+    const coder = SHOW['qwen2.5-coder:1.5b-base'];
+    const show: Record<string, ShowResponse> = {
+      'oreo-1.5b:latest': { ...coder, parameters: 'num_ctx 8192' },
+      'qwen2.5-coder:1.5b-base': coder,
+      'oreo-2b:latest': { ...qwen2, parameters: 'num_ctx 32768' },
+      'oreo-4b:latest': qwen4,
+      'qwen3.5:2b': qwen2,
+      'qwen3.5:4b': qwen4,
+      'gemma4:31b-cloud': { capabilities: ['completion', 'tools'], details: { parameter_size: '31B' } },
+    };
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/api/tags')) {
+        return jsonResponse(200, {
+          models: Object.keys(show).map((name) => ({
+            name,
+            ...(name.endsWith('-cloud') ? { remote_host: 'https://ollama.com:443' } : {}),
+          })),
+        });
+      }
+      return jsonResponse(200, show[JSON.parse(String(init?.body)).model as string]);
+    }) as typeof fetch;
+    const models = await new OllamaClient(ollama, fetchImpl).listModels();
+    expect(models.map((m) => m.name)).toEqual([
+      'oreo-4b',
+      'qwen3.5:4b',
+      'oreo-2b',
+      'qwen3.5:2b',
+      'oreo-1.5b',
+      'qwen2.5-coder:1.5b-base',
+    ]);
+    expect(defaultModel(models)?.name).toBe('oreo-4b');
+    expect(completionModel(models)?.sizeB).toBe(1.5);
+    expect(models.find((m) => m.name === 'oreo-2b')?.maxPromptChars).toBeGreaterThan(
+      models.find((m) => m.name === 'qwen3.5:2b')?.maxPromptChars ?? 0,
+    );
   });
 });
 

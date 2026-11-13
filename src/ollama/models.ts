@@ -28,7 +28,10 @@ export interface TagEntry {
   parameterSize?: string;
 }
 
-/** Reads Ollama's `GET /api/tags` body. */
+/**
+ * Reads Ollama's `GET /api/tags` body, leaving out Ollama's cloud models: they run on
+ * ollama.com, not the Mac (`remote_host`/`remote_model` set, or a name ending in "cloud").
+ */
 export function tagsFrom(body: unknown): TagEntry[] {
   const list =
     body && typeof body === 'object' && Array.isArray((body as { models?: unknown }).models)
@@ -38,14 +41,16 @@ export function tagsFrom(body: unknown): TagEntry[] {
   const tags: TagEntry[] = [];
   for (const item of list) {
     if (!item || typeof item !== 'object') continue;
-    const { name, model, digest, details } = item as {
+    const { name, model, digest, details, remote_host, remote_model } = item as {
       name?: unknown;
       model?: unknown;
       digest?: unknown;
       details?: { parameter_size?: unknown };
+      remote_host?: unknown;
+      remote_model?: unknown;
     };
     const id = typeof name === 'string' ? name : typeof model === 'string' ? model : undefined;
-    if (!id) continue;
+    if (!id || remote_host || remote_model || /[-:]cloud$/i.test(id)) continue;
     tags.push({
       name: id,
       digest: typeof digest === 'string' ? digest : undefined,

@@ -158,7 +158,8 @@ commit, pull request) through the local `github-mcp-server` over stdio.
   gpt-oss, else `switch`; none → no menu and no `reasoning_effort`), the context from the
   Modelfile's `num_ctx` (else `DEFAULT_CONTEXT_TOKENS`, Ollama's 4K default, capped at the
   trained length) → `maxPromptChars` through `promptBudget`; a model without `completion`
-  (embeddings) is left out, and one `/api/show` won't describe is offered for plain chat.
+  (embeddings) and Ollama's cloud models (`remote_host`/`remote_model`, or a name ending in
+  `cloud`; they run on ollama.com) are left out, and one `/api/show` won't describe is offered for plain chat.
   The menu is largest first (`inMenuOrder`); with nothing chosen, `defaultModel` picks the
   largest with tools. No model id is written anywhere in the code. The list is read at
   activation, when `oreo.ollamaUrl` changes, and from the Retry button after a failure,
