@@ -1,3 +1,5 @@
+<img src="media/icon.png" alt="Oreo logo" width="96" />
+
 # Oreo Code
 
 A VS Code extension for chatting and coding with the models on your Mac's own [Ollama](https://ollama.com). Nothing leaves the Mac.
