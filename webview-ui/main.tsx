@@ -306,7 +306,7 @@ function Approval({ request }: { request: ApprovalRequest }) {
 function Bubble({ message, pending }: { message: ChatMessage; pending?: string }) {
   return (
     <div class={`bubble ${message.role}`}>
-      <div class="role">{message.role === 'user' ? 'You' : 'Oreo Code'}</div>
+      <div class="role">{message.role === 'user' ? 'You' : 'Oreo'}</div>
       {!!message.steps?.length && (
         <div class="steps">
           {message.steps.map((s, i) => (
