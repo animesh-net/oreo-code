@@ -1,5 +1,5 @@
 import { Instructions } from '../agent/instructions';
-import { detectCheckCommand } from '../agent/verify';
+import { detectCheckCommand, detectStartCommand, expectsServer, startScript } from '../agent/verify';
 import { Checkpoint } from '../agent/checkpoint';
 import { FIND_SYMBOL_TOOL, runFindSymbol } from '../agent/findSymbol';
 import { runAgent, type AgentModel } from '../agent/loop';
@@ -153,14 +153,27 @@ export function instructionBudget(maxPromptChars = MAX_PROMPT_CHARS): number {
   return Math.min(24_000, Math.floor(maxPromptChars * 0.15));
 }
 
-/** The project's check command, found from its files; undefined if there isn't one. */
-async function findCheckCommand(ws: WritableWorkspace): Promise<string | undefined> {
+/** The project's check command and how to start the app, found from its files. */
+async function findCheckCommand(
+  ws: WritableWorkspace,
+  task: string,
+): Promise<{
+  checkCommand: string | undefined;
+  startCommand: string | undefined;
+  startServes: boolean;
+  startScript: string | undefined;
+}> {
   try {
     const files = await ws.listFiles();
     const packageJson = files.includes('package.json') ? await ws.readFile('package.json') : undefined;
-    return detectCheckCommand(files, packageJson);
+    return {
+      checkCommand: detectCheckCommand(files, packageJson),
+      startCommand: detectStartCommand(files, packageJson),
+      startServes: expectsServer(task, packageJson),
+      startScript: startScript(packageJson),
+    };
   } catch {
-    return undefined;
+    return { checkCommand: undefined, startCommand: undefined, startServes: false, startScript: undefined };
   }
 }
 
@@ -525,7 +538,11 @@ export class ChatController {
     const findSymbol = this.deps.findSymbol;
     // The repository's instruction files and its check run on their own, nothing to set up.
     const instructions = new Instructions(ws, instructionBudget(model.info.maxPromptChars));
-    const [rootInstructions, checkCommand] = await Promise.all([instructions.root(), findCheckCommand(ws)]);
+    const task = [...history].reverse().find((m) => m.role === 'user')?.content ?? '';
+    const [rootInstructions, { checkCommand, startCommand, startServes, startScript: script }] = await Promise.all([
+      instructions.root(),
+      findCheckCommand(ws, task),
+    ]);
     const wire: WireMessage[] = [
       { role: 'system', content: await buildSystemPrompt(ws, true, true, rootInstructions) },
       ...historyToWire(history),
@@ -555,6 +572,9 @@ export class ChatController {
       instructionsFor: (path) => instructions.forPath(path),
       problems: ws.problems?.bind(ws),
       checkCommand,
+      startCommand,
+      startServes,
+      startScript: script,
     });
   }
 

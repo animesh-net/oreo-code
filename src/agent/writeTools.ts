@@ -1,3 +1,4 @@
+import type { SmokeResult } from './smoke';
 import type { Problem } from './instructions';
 import type { FunctionTool, ToolCall } from '../ollama/client';
 import { isSecretPath, type Workspace } from './workspaceTools';
@@ -20,6 +21,8 @@ export interface WritableWorkspace extends Workspace {
   writeProblem?(path: string): Promise<string | undefined>;
   /** Errors VS Code's language support reports in a file; `wait` lets it re-check after a change first. */
   problems?(path: string, wait: boolean): Promise<Problem[]>;
+  /** Starts the app for a few seconds to see it runs (src/agent/smoke.ts). */
+  smokeRun?(command: string, signal: AbortSignal, server: boolean): Promise<SmokeResult>;
   /** Runs a command line in the folder's root with the user's shell. */
   runCommand(command: string, signal: AbortSignal): Promise<CommandResult>;
 }
@@ -41,7 +44,12 @@ export const MAX_COMMAND_OUTPUT_CHARS = 12_000;
  */
 export const MAX_WRITE_CHARS = 200_000;
 
-export type WriteToolName = 'edit_file' | 'create_file' | 'run_command';
+export type WriteToolName = 'edit_file' | 'replace_lines' | 'write_file' | 'create_file' | 'run_command';
+
+/** write_file rewrites only files up to this size; bigger ones are changed with replace_lines. */
+export const MAX_REWRITE_CHARS = 12_000;
+/** Lines of context shown around a replace_lines change, with their new numbers. */
+const REPORT_CONTEXT_LINES = 2;
 
 /** Tools that change the folder: each one goes through approval (src/agent/policy.ts). */
 export const WRITE_TOOLS: FunctionTool[] = [
@@ -59,6 +67,39 @@ export const WRITE_TOOLS: FunctionTool[] = [
           new_text: { type: 'string', description: 'The text to put in its place' },
         },
         required: ['path', 'old_text', 'new_text'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'replace_lines',
+      description:
+        'Change a file by line numbers, as read_file shows them: lines start_line to end_line (both included) are replaced by new_text. To insert without replacing, set end_line to start_line - 1. new_text is plain code, without line numbers. The result shows the changed lines with their new numbers; use those for the next change.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Relative path, as list_files shows it' },
+          start_line: { type: 'integer', description: 'First line to replace, from 1' },
+          end_line: { type: 'integer', description: 'Last line to replace (start_line - 1 to insert)' },
+          new_text: { type: 'string', description: 'The new lines, or "" to delete the lines' },
+        },
+        required: ['path', 'start_line', 'end_line', 'new_text'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'write_file',
+      description: `Replace the whole content of an existing file (up to ${MAX_REWRITE_CHARS} characters). Write the complete file: every line, never "..." or "rest unchanged". Good for fixing a small file in one go.`,
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Relative path, as list_files shows it' },
+          content: { type: 'string', description: 'The complete new file' },
+        },
+        required: ['path', 'content'],
       },
     },
   },
@@ -97,7 +138,15 @@ export function isWriteTool(name: string): name is WriteToolName {
 
 /** A write waiting for approval: what it will do, shown on the card before anything changes. */
 export type PendingWrite =
-  | { kind: 'edit_file'; path: string; oldText: string; newText: string; diff: string }
+  | {
+      kind: 'edit_file';
+      path: string;
+      oldText: string;
+      newText: string;
+      diff: string;
+      /** Added to the result for the model, e.g. the changed lines with their new numbers. */
+      report?: string;
+    }
   | { kind: 'create_file'; path: string; content: string; diff: string }
   | { kind: 'run_command'; command: string };
 
@@ -137,6 +186,40 @@ export async function prepareWrite(
       if (found.text.length > MAX_WRITE_CHARS) return { error: tooLarge(path) };
       return { pending: { kind: 'edit_file', path, oldText, newText, diff: makeDiff(path, text, found.text) } };
     }
+    case 'replace_lines':
+    case 'write_file': {
+      // Both become an edit of the whole file: the same approval, Undo and error checks,
+      // and applying fails if the file changed in between.
+      const path = cleanPath(str('path') ?? '');
+      const problem = writePathProblem(path);
+      if (problem) return { error: problem };
+      if (!(await ws.exists(path))) return { error: `Error: ${path} doesn't exist. Use create_file for a new file.` };
+      const blocked = await ws.writeProblem?.(path);
+      if (blocked) return { error: `Error: ${blocked}` };
+      let text: string;
+      try {
+        text = await ws.readFile(path);
+      } catch (err) {
+        return { error: `Error: ${(err as Error).message}` };
+      }
+      const made =
+        call.function.name === 'replace_lines'
+          ? replaceLines(text, path, args.start_line, args.end_line, str('new_text'))
+          : rewriteFile(text, path, str('content'));
+      if ('error' in made) return made;
+      if (made.text.length > MAX_WRITE_CHARS) return { error: tooLarge(path) };
+      if (made.text === text) return { error: `Error: that leaves ${path} unchanged.` };
+      return {
+        pending: {
+          kind: 'edit_file',
+          path,
+          oldText: text,
+          newText: made.text,
+          diff: makeDiff(path, text, made.text),
+          ...(made.report ? { report: made.report } : {}),
+        },
+      };
+    }
     case 'create_file': {
       const path = cleanPath(str('path') ?? '');
       const problem = writePathProblem(path);
@@ -153,6 +236,11 @@ export async function prepareWrite(
       if (!command) return { error: 'Error: command is empty.' };
       if (HIDDEN_CHARS.test(command)) {
         return { error: 'Error: the command has hidden or control characters. Send it as plain text.' };
+      }
+      // A command runs until it ends, so a server sent to the background is stopped with
+      // it and can't be reached: the run check starts the app when the task is done.
+      if (BACKGROUND.test(command)) {
+        return { error: `Error: ${NO_SERVER_BY_COMMAND}` };
       }
       // Looking at files is what read_file, list_files and search are for: no approval, no step wasted.
       if (READS_FILES.test(command) && !OUTSIDE_LISTING.test(command)) {
@@ -196,7 +284,7 @@ export async function applyWrite(
       remember({ path: pending.path, before: text, after: found.text });
       await ws.writeFile(pending.path, found.text);
       remember({ path: pending.path, before: text, after: await settled(ws, pending.path, found.text) });
-      return `Edited ${pending.path}.`;
+      return `Edited ${pending.path}.${pending.report ? `\n${pending.report}` : ''}`;
     }
     case 'create_file': {
       if (await ws.exists(pending.path)) return `Error: ${pending.path} already exists.`;
@@ -256,6 +344,92 @@ export function commandEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
     clean[key] = value;
   }
   return { ...clean, CI: '1', FORCE_COLOR: '0', NO_COLOR: '1' };
+}
+
+/** The file's lines and line ending ("\r\n" files keep theirs). */
+function splitLines(text: string): { lines: string[]; eol: string } {
+  return { lines: text.split(/\r?\n/), eol: text.includes('\r\n') ? '\r\n' : '\n' };
+}
+
+/** new_text as lines: without read_file's line numbers if copied, and without one trailing newline. */
+function newLines(newText: string): string[] {
+  let body = hasLineNumbers(newText) ? stripLineNumbers(newText) : newText;
+  body = body.replace(/\r?\n$/, '');
+  return body === '' ? [] : body.split(/\r?\n/);
+}
+
+/**
+ * replace_lines: lines start..end (1-based, both included) become new_text; end =
+ * start - 1 inserts before start. The report shows the changed lines and a little context
+ * with their new numbers, so the model's next change uses the right ones.
+ */
+export function replaceLines(
+  text: string,
+  path: string,
+  start: unknown,
+  end: unknown,
+  newText: string | undefined,
+): { text: string; report: string } | { error: string } {
+  if (newText === undefined) return { error: 'Error: new_text is missing ("" deletes the lines).' };
+  const s = typeof start === 'string' ? Number(start) : start;
+  const e = typeof end === 'string' ? Number(end) : end;
+  if (typeof s !== 'number' || typeof e !== 'number' || !Number.isInteger(s) || !Number.isInteger(e)) {
+    return { error: 'Error: start_line and end_line must be whole line numbers, as read_file shows them.' };
+  }
+  const { lines, eol } = splitLines(text);
+  // Numbered as read_file shows them: a file ending in a newline has an empty last line,
+  // which the model may edit or append after. The final newline is kept either way.
+  const endsWithNewline = lines.at(-1) === '';
+  const count = lines.length;
+  if (s < 1 || s > count + 1 || e < s - 1 || e > count) {
+    return {
+      error: `Error: ${path} has ${count} lines; lines ${s}–${e} aren't in it. Read the file again for the current line numbers.`,
+    };
+  }
+  const added = newLines(newText);
+  const out = [...lines.slice(0, s - 1), ...added, ...lines.slice(e)];
+  if (endsWithNewline && out.at(-1) !== '') out.push('');
+  const outCount = out.length;
+  const from = Math.max(1, s - REPORT_CONTEXT_LINES);
+  const to = Math.min(outCount, s - 1 + added.length + REPORT_CONTEXT_LINES);
+  const shown = out
+    .slice(from - 1, to)
+    .map((line, i) => `${from + i}: ${line}`)
+    .join('\n');
+  const moved = added.length - (e - s + 1);
+  const report =
+    (to >= from ? `Lines ${from}–${to} of ${path} now:\n${shown}` : `${path} is now empty.`) +
+    (moved ? `\nLines after this change moved by ${moved > 0 ? '+' : ''}${moved}.` : '');
+  return { text: out.join(eol), report };
+}
+
+/** Comments that stand for code left out ("// ... rest unchanged"), which would lose it. */
+const LEFT_OUT =
+  /^\s*(\/\/|#|\/\*|<!--|--)\s*(\.{3}|…)?\s*\(?(rest of (the )?(file|code)|(the )?rest (is |stays )?unchanged|(existing|remaining|other) code( here)?|unchanged( code)?|same as before|code (omitted|unchanged))\b/im;
+
+/** write_file: the whole file replaced, if it's small enough and nothing is left out. */
+export function rewriteFile(
+  text: string,
+  path: string,
+  content: string | undefined,
+): { text: string; report?: string } | { error: string } {
+  if (text.length > MAX_REWRITE_CHARS) {
+    return {
+      error: `Error: ${path} has ${text.length} characters, too many to rewrite whole (${MAX_REWRITE_CHARS} at most). Change it with replace_lines.`,
+    };
+  }
+  if (!content?.trim()) return { error: 'Error: content is empty. Write the complete file.' };
+  let body = hasLineNumbers(content) ? stripLineNumbers(content) : content;
+  if (LEFT_OUT.test(body) || /^\s*(\.{3}|…)\s*$/m.test(body)) {
+    return {
+      error:
+        'Error: content leaves code out ("...", "rest unchanged"). Write the complete file, every line, or use replace_lines.',
+    };
+  }
+  const { eol } = splitLines(text);
+  if (eol === '\r\n') body = body.replace(/\r?\n/g, '\r\n');
+  if (text.endsWith(eol) && !body.endsWith(eol)) body += eol;
+  return { text: body };
 }
 
 /** Below this many non-space characters, a whitespace-free match is too likely to be wrong. */
@@ -515,6 +689,13 @@ export function makeDiff(path: string, before: string | undefined, after: string
   ];
   return lines.join('\n');
 }
+
+/** A command sent to the background: a lone `&` at the end, or nohup / setsid / disown. */
+const BACKGROUND = /(^|[^&])&\s*$|\b(nohup|setsid|disown)\b/;
+
+/** Why the agent shouldn't start the app itself. */
+const NO_SERVER_BY_COMMAND =
+  "don't start the app or a server yourself: run_command waits for a command to end and stops it after 120 seconds, so a server started that way can't be reached. Finish your changes and say you're done: if the project has a start script, the app is then started for you, asked for /, and you're told what happened.";
 
 /** A command that only reads or lists files, with no pipe, redirect or chaining. */
 const READS_FILES = /^\s*(cat|head|tail|less|more|ls|find|grep|rg|wc)\b[^|;&<>`$]*$/;

@@ -128,7 +128,8 @@ commit, pull request) through the local `github-mcp-server` over stdio.
 | `src/agent/writeTools.ts`           | Agent write tools (edit_file, create_file, run_command): path rules, diffs, applying                                       |
 | `src/agent/checkpoint.ts`           | "Undo task": each changed file's text from before the task, in memory                                                      |
 | `src/agent/instructions.ts`         | The repository's instruction files for the agent, and the errors a change added                                            |
-| `src/agent/verify.ts`               | The project check found from its files, run when the agent says it's done                                                  |
+| `src/agent/verify.ts`               | The project check and start command found from its files, run when the agent says it's done                                |
+| `src/agent/smoke.ts`                | Starts the app for a few seconds to see it runs and answers `/`                                                            |
 | `src/agent/findSymbol.ts`           | Read-only `find_symbol` over the completion symbol index                                                                   |
 | `src/agent/workspaceTools.ts`       | Read-only workspace tools (list, read, search); secret files refused                                                       |
 | `src/completion/`                   | Inline completion: repo snippets, symbol index, FIM prompt, budget, trimming; no `vscode`                                  |
@@ -137,6 +138,8 @@ commit, pull request) through the local `github-mcp-server` over stdio.
 | `src/update/`                       | Self-update: newest GitHub release, with a token if there is one, else none (public repo)                                  |
 | `src/shared/protocol.ts`            | Messages between the extension and the webview; both bundles compile with it                                               |
 | `webview-ui/`                       | Preact chat UI, bundled to `dist/webview.js`                                                                               |
+| `test/e2e.test.ts`                  | Agent mode end to end on real projects on disk (`test/support/`), with a scripted model                                    |
+| `test/eval/`                        | `npm run eval`: the same fixture tasks against a real model on Ollama; not in `npm test` or CI                             |
 | `test/`                             | Vitest unit tests                                                                                                          |
 | `scripts/`                          | README link check and the PR description cleaner (shared with oreo-ai)                                                     |
 | `.github/workflows/`                | CI (a `v<major>.<minor>.<n>` release per main build), PR description cleaner, Dependabot merge                             |
@@ -205,21 +208,38 @@ commit, pull request) through the local `github-mcp-server` over stdio.
   is told to do it, up to `MAX_NUDGES` times; a reply that claims changes (`claimsChanges`:
   not negated, not about an earlier task) when the task changed no file and ran no
   command is questioned once, and if it still makes none the reply ends with a note that
-  the task didn't change any file. `MAX_AGENT_STEPS` is the only step limit; ending at it
-  mid-way adds a note saying so. `run_command` refuses commands that only read or list
+  the task didn't change any file. `replace_lines` (by read_file's line numbers; its result
+  shows the changed lines with their new numbers) and `write_file` (a whole existing file
+  up to `MAX_REWRITE_CHARS`, refusing "rest unchanged" placeholders) become an `edit_file`
+  of the whole file, so they share its approval, `runsCode`, Undo and error checks: small
+  models like Oreo 4B can't reliably copy exact text. Agent calls use `AGENT_TEMPERATURE`
+  (0.2) for steadier tool calls. The step limit is `MAX_AGENT_STEPS`, plus `STEPS_PER_FIX`
+  for each failed check sent back; ending at it mid-way adds a note saying so. `run_command` refuses commands that only read or list
   files (`READS_FILES`), pointing to read_file, list_files and search.
 - **Agent mode ends with working code, on its own.** The root `AGENTS.md`, `CLAUDE.md`
   and `.github/copilot-instructions.md` go in the agent's system prompt, and a folder's
   own `AGENTS.md`/`CLAUDE.md` with the first file read or changed there (`Instructions`,
   within `instructionBudget`). After each edit the result lists the VS Code errors it
   added (`describeProblems`, against the file's errors before the task). When the model
-  says it's done and the task changed files, the changed files are checked again and the
+  says it's done and the task changed files, the changed files are checked again (every error left in them
+  counts, not only new ones, since a repeated message can hide a new error) and the
   project check from `detectCheckCommand` runs (without one, or if you reject it, `syntaxCheckCommand` parses
   the changed Python files, which runs no code and needs no card; JavaScript is left to
-  VS Code's own errors, as `node --check` misjudges JSX and Flow by Node version); failures go back to the model up to
+  VS Code's own errors, as `node --check` misjudges JSX and Flow by Node version). When all of
+  that passes and the project has a `start` script (`detectStartCommand`, not a watch mode),
+  `smokeRun` (`src/agent/smoke.ts`) starts the app for up to `SMOKE_RUN_MS` with a free
+  `PORT`, asks for `/` on the port it prints, and fails on a crash, a non-zero exit, a 5xx
+  answer or no answer; for a server (`expectsServer`: the task is about serving or the
+  project depends on a server framework) exiting at once or nothing answering on its port
+  fails too. The process group is killed after. A `run_command` that starts the app
+  (`appStartIn`: `npm start`, the start script itself, or anything sent to the background
+  with `&` or `nohup`, under endings like `2>&1 || true`) runs the same way instead, after
+  its approval card, since a command must end and a server started in the background
+  can't be reached; without `smokeRun`, background commands are refused. Failures go back to the model up to
   `MAX_VERIFY_ROUNDS` times, then the reply says they still fail. None of it needs a
-  setting; the project check runs code the agent may have changed, so it asks once per
-  task before its first run (rejecting skips it for that task), then runs on its own.
+  setting; the project check and starting the app run code the agent may have changed, so
+  each asks once per task before its first run (rejecting skips it for that task), then
+  runs on its own.
   The check command is never read from settings a repository could set. Agent mode is
   offered only for models with `supportsTools: true`; `find_symbol` reads the one
   symbol index completion keeps, never a second one.
@@ -247,6 +267,10 @@ npx prettier --check .
 npm run check      # typecheck (extension + webview), vitest, esbuild
 npm run package    # if package.json, .vscodeignore or esbuild.mjs changed
 ```
+
+A change to agent mode keeps `test/e2e.test.ts` passing (each fixture task must end with
+the fixture's own check passing) and adds a case there for any new model behaviour it
+handles; `npm run eval` on the Mac measures it with the real Oreo 4B.
 
 `.husky/pre-commit` formats staged files with Prettier and checks README links;
 `.husky/commit-msg` rejects AI attribution trailers. CI checks the PR title, the

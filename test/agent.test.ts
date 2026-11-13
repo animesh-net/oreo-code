@@ -2,9 +2,17 @@ import { APIError } from 'openai';
 import { describe, expect, it } from 'vitest';
 import { Checkpoint } from '../src/agent/checkpoint';
 import { describeProblems, Instructions, newProblems, type Problem } from '../src/agent/instructions';
-import { detectCheckCommand, syntaxCheckCommand } from '../src/agent/verify';
+import {
+  detectCheckCommand,
+  detectStartCommand,
+  appStartIn,
+  expectsServer,
+  startsApp,
+  syntaxCheckCommand,
+} from '../src/agent/verify';
 import { FIND_SYMBOL_TOOL, runFindSymbol } from '../src/agent/findSymbol';
 import {
+  AGENT_TEMPERATURE,
   announcesAction,
   claimsChanges,
   MALFORMED_TWICE,
@@ -21,6 +29,9 @@ import {
   prepareWrite,
   closestText,
   commandEnv,
+  MAX_REWRITE_CHARS,
+  replaceLines,
+  rewriteFile,
   findIgnoringWhitespace,
   keepEnds,
   MAX_WRITE_CHARS,
@@ -649,6 +660,8 @@ describe('agent mode in the chat', () => {
       'search',
       'find_symbol',
       'edit_file',
+      'replace_lines',
+      'write_file',
       'create_file',
       'run_command',
     ]);
@@ -795,10 +808,36 @@ describe('repository instructions and checks', () => {
     ];
     expect(newProblems(before, after)).toEqual([{ line: 4, message: "';' expected.", source: 'ts' }]);
     expect(describeProblems('a.ts', before, after)).toBe(
-      "Errors in a.ts after this change. Fix them before going on:\n- line 4: ';' expected. (ts)",
+      "Errors in a.ts after this change. Fix them before going on:\n- line 4: ';' expected. (ts)\nIt also still has errors from before this task:\n- line 9: old problem",
     );
-    expect(describeProblems('a.ts', before, [{ line: 1, message: 'old problem' }])).toMatch(/No new errors/);
+    expect(describeProblems('a.ts', before, [{ line: 1, message: 'old problem' }])).toBe(
+      "a.ts still has errors from before this task. Fix them if they're part of the task:\n- line 1: old problem",
+    );
     expect(describeProblems('a.ts', [], [])).toBe('No errors reported for a.ts.');
+  });
+
+  it("doesn't end a task while a changed file still has an error, even one that was there before", async () => {
+    // The edit loses a closing brace in a file that already lacked one: same message, so
+    // only counting new errors would have said "no new errors".
+    const ws = memoryWorkspace({ 'server/index.js': 'function a() {\n  run();\n' });
+    const missing = [{ line: 3, message: "'}' expected." }];
+    const errors: Record<string, Problem[]> = { 'server/index.js': missing };
+    ws.writeFile = async (p, text) => {
+      ws.files[p] = text;
+      errors[p] = text.trimEnd().endsWith('}') ? [] : missing;
+    };
+    const client = scripted([
+      [call('edit_file', { path: 'server/index.js', old_text: '  run();', new_text: '  start();' })],
+      'Done.',
+      [call('edit_file', { path: 'server/index.js', old_text: '  start();', new_text: '  start();\n}' }, 'c2')],
+      'Closed the function.',
+    ]);
+    const d = deps(client, ws, { approveEdits: () => true, problems: async (p) => errors[p] ?? [] });
+    const result = await runAgent(d);
+    expect(d.steps.map((s) => s.title)).toContain('Checked 1 changed file: 1 error left');
+    expect(client.calls[2].wire.at(-1)?.content).toMatch(/still has errors from before this task[\s\S]*'}' expected/);
+    expect(ws.files['server/index.js']).toBe('function a() {\n  start();\n}\n');
+    expect(result.reply).toMatch(/Closed the function\.$/);
   });
 
   it('finds the project check from its files', () => {
@@ -811,6 +850,46 @@ describe('repository instructions and checks', () => {
     expect(detectCheckCommand(['go.mod'], undefined)).toBe('go build ./...');
     expect(detectCheckCommand(['README.md'], undefined)).toBeUndefined();
     expect(detectCheckCommand(['package.json'], pkg({ start: 'node .' }))).toBeUndefined();
+  });
+
+  it('finds how to start the app, skipping watch modes', () => {
+    const pkg = (scripts: object) => JSON.stringify({ scripts });
+    expect(detectStartCommand(['package.json'], pkg({ start: 'node server/index.js' }))).toBe('npm start');
+    expect(detectStartCommand(['package.json', 'pnpm-lock.yaml'], pkg({ start: 'node .' }))).toBe('pnpm start');
+    expect(detectStartCommand(['package.json', 'yarn.lock'], pkg({ start: 'node .' }))).toBe('yarn start');
+    expect(detectStartCommand(['package.json'], pkg({ start: 'nodemon index.js' }))).toBeUndefined();
+    expect(detectStartCommand(['package.json'], pkg({ start: 'node --watch .' }))).toBeUndefined();
+    expect(detectStartCommand(['package.json'], pkg({ test: 'vitest' }))).toBeUndefined();
+    expect(detectStartCommand(['package.json'], '{not json')).toBeUndefined();
+    expect(detectStartCommand(['main.py'], undefined)).toBeUndefined();
+  });
+
+  it('tells a server app from one that just runs', () => {
+    expect(expectsServer('fix issues in my code so the app runs and serves public/index.html', undefined)).toBe(true);
+    expect(expectsServer('make it listen on port 8080', undefined)).toBe(true);
+    expect(expectsServer('fix the failing slugify test', JSON.stringify({ dependencies: { express: '^4' } }))).toBe(
+      true,
+    );
+    expect(expectsServer('fix the failing slugify test', JSON.stringify({ dependencies: { lodash: '^4' } }))).toBe(
+      false,
+    );
+    expect(expectsServer('rename the variable', '{not json')).toBe(false);
+    expect(startsApp('npm start')).toBe(true);
+    expect(startsApp('yarn run start')).toBe(true);
+    expect(startsApp('npm run start:prod')).toBe(false);
+    expect(startsApp('npm test')).toBe(false);
+  });
+
+  it('knows a command that starts the app, under the noise models add', () => {
+    const script = 'node server/index.js';
+    expect(appStartIn('npm start &', script)).toBe('npm start');
+    expect(appStartIn('npm run start', undefined)).toBe('npm run start');
+    expect(appStartIn('node server/index.js 2>&1 || true', script)).toBe('node server/index.js');
+    expect(appStartIn('nohup node other.js &', script)).toBe('node other.js');
+    expect(appStartIn('node other.js', script)).toBeUndefined();
+    expect(appStartIn('npm test', script)).toBeUndefined();
+    expect(appStartIn('pkill node; npm start &', script)).toBeUndefined();
+    expect(appStartIn('sleep 2 && curl localhost:3597', script)).toBeUndefined();
   });
 
   it('shows a change the errors it added, so the model fixes them', async () => {
@@ -830,7 +909,7 @@ describe('repository instructions and checks', () => {
     const first = client.calls[1].wire.filter((m) => m.role === 'tool').at(-1)?.content;
     expect(first).toMatch(/Errors in a\.ts after this change[\s\S]*line 1: ';' expected\./);
     expect(result.reply).toBe('Fixed.');
-    expect(d.steps.some((s) => /no new errors/.test(s.title))).toBe(true);
+    expect(d.steps.some((s) => /Checked 1 changed file: no errors/.test(s.title))).toBe(true);
   });
 
   it("doesn't let the task end while the project check fails, and says so if it never passes", async () => {
@@ -882,10 +961,7 @@ describe('repository instructions and checks', () => {
     expect(ws.commands).toEqual([]);
     expect(result.reply).toBe('Done.');
     expect(d.steps.map((s) => s.title)).toEqual(
-      expect.arrayContaining([
-        'Checked 1 changed file: no new errors',
-        'Skipped the project check `npm test` (rejected)',
-      ]),
+      expect.arrayContaining(['Checked 1 changed file: no errors', 'Skipped the project check `npm test` (rejected)']),
     );
   });
 
@@ -1166,6 +1242,22 @@ describe('step limit, file-reading commands and the syntax check', () => {
     }
   });
 
+  it('refuses a server sent to the background, since run_command waits for it and stops it', async () => {
+    const ws = memoryWorkspace({});
+    for (const command of [
+      'npm start &',
+      'node server/index.js & ',
+      'nohup node server.js',
+      'pkill node; npm start &',
+    ]) {
+      const r = await prepareWrite(ws, call('run_command', { command }));
+      expect('error' in r && r.error).toMatch(/don't start the app or a server yourself/);
+    }
+    for (const command of ['npm run build && npm test', 'make 2>&1', 'echo a && echo b']) {
+      expect('pending' in (await prepareWrite(ws, call('run_command', { command })))).toBe(true);
+    }
+  });
+
   it('builds one plain parse-only command for changed Python files, for any shell', () => {
     expect(syntaxCheckCommand(['app/main.py', "it's.py", 'README.md'])).toBe(
       "python3 -c 'import ast,sys; [ast.parse(open(f).read(), f) for f in sys.argv[1:]]' 'app/main.py' 'it'\\''s.py'",
@@ -1250,5 +1342,106 @@ describe('step limit, file-reading commands and the syntax check', () => {
     const client = scripted([[call('list_files', {})], 'All good: nothing to change.']);
     const result = await runAgent(deps(client, ws, { maxSteps: 2 }));
     expect(result.reply).toBe('All good: nothing to change.');
+  });
+});
+
+describe('edits a small model can make', () => {
+  const file = 'line one\nline two\nline three\nline four\n';
+
+  it('replaces lines by number and reports the new numbering', () => {
+    const r = replaceLines(file, 'a.txt', 2, 3, 'TWO\nTWO-B\nTHREE');
+    if ('error' in r) throw new Error(r.error);
+    expect(r.text).toBe('line one\nTWO\nTWO-B\nTHREE\nline four\n');
+    expect(r.report).toBe(
+      'Lines 1–6 of a.txt now:\n1: line one\n2: TWO\n3: TWO-B\n4: THREE\n5: line four\n6: \nLines after this change moved by +1.',
+    );
+  });
+
+  it('inserts with end_line = start_line - 1, deletes with "", and strips copied line numbers', () => {
+    const ins = replaceLines(file, 'a.txt', 2, 1, 'inserted');
+    expect('text' in ins && ins.text).toBe('line one\ninserted\nline two\nline three\nline four\n');
+    const del = replaceLines(file, 'a.txt', 2, 3, '');
+    expect('text' in del && del.text).toBe('line one\nline four\n');
+    const numbered = replaceLines(file, 'a.txt', 4, 4, '4: line FOUR');
+    expect('text' in numbered && numbered.text).toBe('line one\nline two\nline three\nline FOUR\n');
+    const crlf = replaceLines('a\r\nb\r\n', 'w.cs', 2, 2, 'B\nC');
+    expect('text' in crlf && crlf.text).toBe('a\r\nB\r\nC\r\n');
+  });
+
+  it('numbers lines as read_file does, so the last line it showed can be edited', async () => {
+    // read_file shows "file (5 lines)" for a 4-line file ending in a newline: line 5 is empty.
+    const ws = memoryWorkspace({ 'a.txt': file });
+    const shown = await runWorkspaceTool(ws, call('read_file', { path: 'a.txt' }));
+    expect(shown.content).toMatch(/^a\.txt \(5 lines\)/);
+    const onLast = replaceLines(file, 'a.txt', 5, 5, 'line five');
+    expect('text' in onLast && onLast.text).toBe('line one\nline two\nline three\nline four\nline five\n');
+    const afterLast = replaceLines(file, 'a.txt', 6, 5, 'line six');
+    expect('text' in afterLast && afterLast.text).toBe('line one\nline two\nline three\nline four\n\nline six\n');
+    const replaceFour = replaceLines(file, 'a.txt', 4, 4, 'FOUR');
+    expect('text' in replaceFour && replaceFour.text).toBe('line one\nline two\nline three\nFOUR\n');
+  });
+
+  it('refuses line numbers that are not in the file', () => {
+    const r = replaceLines(file, 'a.txt', 7, 8, 'x');
+    expect('error' in r && r.error).toMatch(/has 5 lines; lines 7–8 aren't in it/);
+    expect('error' in replaceLines(file, 'a.txt', 'two', 3, 'x')).toBe(true);
+  });
+
+  it('rewrites a small file whole, keeping its line endings, and refuses left-out code', () => {
+    const r = rewriteFile('a\r\nb\r\n', 'w.cs', 'x\ny');
+    expect('text' in r && r.text).toBe('x\r\ny\r\n');
+    for (const content of [
+      'import x;\n// ... rest of the file unchanged',
+      'a();\n...\nb();',
+      '# existing code here\nprint(1)',
+    ]) {
+      expect(rewriteFile('old', 'a.js', content)).toMatchObject({ error: expect.stringMatching(/leaves code out/) });
+    }
+    expect(rewriteFile('x'.repeat(MAX_REWRITE_CHARS + 1), 'big.js', 'y')).toMatchObject({
+      error: expect.stringMatching(/too many to rewrite whole/),
+    });
+    expect('text' in rewriteFile('old', 'a.js', 'const total = items.length; // spread ...rest')).toBe(true);
+  });
+
+  it('applies replace_lines through the usual edit flow, with Undo and the new numbering for the model', async () => {
+    const ws = memoryWorkspace({ 'server/index.js': 'function a() {\n  run(\n}\n' });
+    const client = scripted([
+      [call('replace_lines', { path: 'server/index.js', start_line: 2, end_line: 2, new_text: '  run();' })],
+      'Fixed the call on line 2.',
+    ]);
+    const d = deps(client, ws, { approveEdits: () => true });
+    const result = await runAgent(d);
+    expect(ws.files['server/index.js']).toBe('function a() {\n  run();\n}\n');
+    expect(client.calls[1].wire.at(-1)?.content).toMatch(
+      /Edited server\/index\.js\.\nLines 1–4 of server\/index\.js now:\n1: function a\(\) \{\n2:   run\(\);/,
+    );
+    expect(d.steps[0].title).toBe('Edit server/index.js');
+    expect(result.reply).toBe('Fixed the call on line 2.');
+    expect(await d.checkpoint.restore(ws)).toMatchObject({ restored: ['server/index.js'] });
+    expect(ws.files['server/index.js']).toBe('function a() {\n  run(\n}\n');
+  });
+
+  it('still asks before rewriting a file that decides what runs', async () => {
+    const ws = memoryWorkspace({ 'package.json': '{"scripts":{"test":"vitest"}}' });
+    const client = scripted([
+      [call('write_file', { path: 'package.json', content: '{"scripts":{"test":"node evil.js"}}' })],
+      'Done.',
+    ]);
+    const d = deps(client, ws, { approveEdits: () => true });
+    await runAgent(d);
+    expect(d.approvals.map((p) => p.kind)).toEqual(['edit_file']);
+  });
+
+  it('asks the model for steady output in agent mode', async () => {
+    const ws = memoryWorkspace({});
+    const temps: (number | undefined)[] = [];
+    const client = scripted(['Hi.']);
+    const inner = client.streamChat;
+    client.streamChat = (m, w, s, e, t, temperature) => {
+      temps.push(temperature);
+      return inner(m, w, s, e, t);
+    };
+    await runAgent(deps(client, ws));
+    expect(temps).toEqual([AGENT_TEMPERATURE]);
   });
 });

@@ -34,6 +34,8 @@ export interface ModelClient {
     signal: AbortSignal,
     effort: ReasoningEffort,
     tools?: FunctionTool[],
+    /** Lower is steadier; agent mode sets it so small models follow the tool format. */
+    temperature?: number,
   ): AsyncIterable<StreamEvent>;
 }
 
@@ -84,6 +86,7 @@ export class OllamaClient implements ModelClient {
     signal: AbortSignal,
     effort: ReasoningEffort,
     tools?: FunctionTool[],
+    temperature?: number,
   ): AsyncIterable<StreamEvent> {
     // Ollama's /v1 honours reasoning_effort: "none" turns thinking off, and on a model
     // that can only think or not (qwen3.5) any level turns it on. A model that can't
@@ -99,6 +102,7 @@ export class OllamaClient implements ModelClient {
         // Ollama shifts the context it loses its place and repeats itself.
         max_tokens: thinks ? MAX_OUTPUT_TOKENS * 2 : MAX_OUTPUT_TOKENS,
         ...(tools?.length ? { tools } : {}),
+        ...(temperature !== undefined ? { temperature } : {}),
       },
       { signal },
     );

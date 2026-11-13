@@ -3,7 +3,7 @@ import type { AgentStep, ModelInfo, ReasoningEffort } from '../shared/protocol';
 import type { Checkpoint } from './checkpoint';
 import { describeProblems, newProblems, type Problem } from './instructions';
 import { needsApproval } from './policy';
-import { COMMAND_NOT_FOUND, MAX_VERIFY_ROUNDS, syntaxCheckCommand } from './verify';
+import { appStartIn, COMMAND_NOT_FOUND, MAX_VERIFY_ROUNDS, syntaxCheckCommand } from './verify';
 import {
   applyWrite,
   COMMAND_TIMEOUT_MS,
@@ -23,12 +23,17 @@ import type { WritableWorkspace } from './writeTools';
  * model has to say what it did. Kept here only.
  */
 export const MAX_AGENT_STEPS = 15;
+/** More steps for each failed check sent back, so the model can fix what it found. */
+export const STEPS_PER_FIX = 6;
 /** How much of a tool's arguments and result each step shows in the chat. */
 export const MAX_STEP_DETAIL_CHARS = 2_000;
 
 export const MALFORMED_TWICE =
   "The model sent tool calls it couldn't make twice in a row, so the task stopped. Try again, or pick a larger model.";
 const REJECTED = 'The user rejected this. Do not try it again; ask what they want instead, or take another approach.';
+
+/** Agent mode's sampling temperature: low, so small models (Oreo 4B) keep to the tool format. */
+export const AGENT_TEMPERATURE = 0.2;
 
 /** How many times a task may be told to carry out what it announced. */
 export const MAX_NUDGES = 3;
@@ -131,6 +136,12 @@ export interface AgentDeps {
   problems?(path: string, wait: boolean): Promise<Problem[]>;
   /** The project's check (build, typecheck or tests), run when the agent says it's done. */
   checkCommand?: string;
+  /** How to start the app (`npm start`), run for a few seconds when it's done to see it works. */
+  startCommand?: string;
+  /** The app is a server: when started it must stay up and answer `/`. */
+  startServes?: boolean;
+  /** The `start` script's command line, to know it when the model runs it. */
+  startScript?: string;
   maxSteps?: number;
 }
 
@@ -148,7 +159,8 @@ export interface AgentResult {
  * failure; on Stop the caller sees the abort.
  */
 export async function runAgent(deps: AgentDeps): Promise<AgentResult> {
-  const max = deps.maxSteps ?? MAX_AGENT_STEPS;
+  /** The step limit: MAX_AGENT_STEPS, plus STEPS_PER_FIX for each failed check sent back. */
+  let max = deps.maxSteps ?? MAX_AGENT_STEPS;
   const tools = [...deps.readTools, ...WRITE_TOOLS];
   const toolNames = new Set(tools.map((t) => t.function.name));
   const steps: AgentStep[] = [];
@@ -173,6 +185,8 @@ export async function runAgent(deps: AgentDeps): Promise<AgentResult> {
   const progress = { changes: 0, commands: 0 };
   /** Whether you were asked to allow the project check this task, and the answer. */
   const check = { asked: false, allowed: false };
+  /** The same for starting the app. */
+  const start = { asked: false, allowed: false };
   let changesAtCheck = -1;
 
   let n = 1;
@@ -192,6 +206,7 @@ export async function runAgent(deps: AgentDeps): Promise<AgentResult> {
         deps.signal,
         deps.effort,
         offered,
+        AGENT_TEMPERATURE,
       )) {
         if (event.type === 'toolCalls') {
           calls = event.calls;
@@ -250,7 +265,7 @@ export async function runAgent(deps: AgentDeps): Promise<AgentResult> {
       // failure not its own (e.g. already broken before the task). Report it and stop.
       if (progress.changes === changesAtCheck) break;
       changesAtCheck = progress.changes;
-      const failure = await verifyWork(deps, baseline, step, check);
+      const failure = await verifyWork(deps, baseline, step, check, start);
       if (!failure) {
         unresolved = undefined;
         break;
@@ -260,6 +275,7 @@ export async function runAgent(deps: AgentDeps): Promise<AgentResult> {
         break;
       }
       verifyRounds++;
+      max += STEPS_PER_FIX;
       unresolved = failure;
       deps.wire.push({ role: 'assistant', content: text });
       deps.wire.push({
@@ -384,20 +400,26 @@ async function verifyWork(
   baseline: ReadonlyMap<string, Problem[]>,
   step: (s: AgentStep) => void,
   check: { asked: boolean; allowed: boolean },
+  start: { asked: boolean; allowed: boolean },
 ): Promise<string | undefined> {
   const failures: string[] = [];
   if (deps.problems) {
+    // Every error left in a file the task changed counts, not only new ones: a task that
+    // changes a file should leave it working.
     let count = 0;
+    let added = 0;
     for (const [path, before] of baseline) {
       const after = await deps.problems(path, false);
-      const added = newProblems(before, after);
-      if (added.length) {
-        count += added.length;
-        failures.push(describeProblems(path, before, after));
-      }
+      if (!after.length) continue;
+      count += after.length;
+      added += newProblems(before, after).length;
+      failures.push(describeProblems(path, before, after));
     }
+    const files = `${baseline.size} changed file${baseline.size === 1 ? '' : 's'}`;
     step({
-      title: `Checked ${baseline.size} changed file${baseline.size === 1 ? '' : 's'}: ${count ? `${count} new error${count === 1 ? '' : 's'}` : 'no new errors'}`,
+      title: count
+        ? `Checked ${files}: ${count} error${count === 1 ? '' : 's'} left${added ? ` (${added} new)` : ''}`
+        : `Checked ${files}: no errors`,
       outcome: count ? 'error' : 'ok',
     });
   }
@@ -452,6 +474,29 @@ async function verifyWork(
     });
     if (!passed) failures.push(`The project check \`${deps.checkCommand}\` failed (${status}):\n${output}`);
   }
+  // Code that parses and passes its checks can still crash when it runs: start the app
+  // for a few seconds. It runs your code, so like the check it asks once per task.
+  const smoke = deps.workspace.smokeRun?.bind(deps.workspace);
+  if (!failures.length && deps.startCommand && smoke) {
+    if (!start.asked) {
+      start.asked = true;
+      start.allowed = await deps.requestApproval({ kind: 'run_command', command: deps.startCommand });
+      if (deps.signal.aborted) throw abortError();
+      if (!start.allowed)
+        step({ title: `Skipped starting the app with \`${deps.startCommand}\` (rejected)`, outcome: 'rejected' });
+    }
+    if (start.allowed) {
+      const run = await smoke(deps.startCommand, deps.signal, deps.startServes ?? false);
+      if (deps.signal.aborted) throw abortError();
+      step({
+        title: `Started the app with \`${deps.startCommand}\`: ${run.summary}`,
+        detail: clip(run.output),
+        outcome: run.ok ? 'ok' : 'error',
+      });
+      if (!run.ok)
+        failures.push(`Starting the app with \`${deps.startCommand}\` failed: it ${run.summary}.\n${run.output}`);
+    }
+  }
   return failures.length ? failures.join('\n\n') : undefined;
 }
 
@@ -462,7 +507,15 @@ async function runWrite(
   baseline: Map<string, Problem[]>,
   progress: { changes: number; commands: number },
 ): Promise<string> {
-  const prepared = await prepareWrite(deps.workspace, call);
+  // A command that starts the app would block until stopped, or leave a server nobody
+  // can reach: run it the way the run check does, for a few seconds, and say what happened.
+  const smoke = deps.workspace.smokeRun?.bind(deps.workspace);
+  const appStart =
+    smoke && call.function.name === 'run_command' ? appStartIn(commandOf(call), deps.startScript) : undefined;
+  const prepared = await prepareWrite(
+    deps.workspace,
+    appStart ? { ...call, function: { ...call.function, arguments: JSON.stringify({ command: appStart }) } } : call,
+  );
   if ('error' in prepared) {
     const where = pathOf(call);
     step({
@@ -490,7 +543,12 @@ async function runWrite(
   }
   let result: string;
   try {
-    result = await applyWrite(deps.workspace, pending, deps.signal, (e) => deps.checkpoint.remember(e));
+    if (appStart && smoke) {
+      const run = await smoke(appStart, deps.signal, deps.startServes ?? false);
+      result = `${run.ok ? '' : 'Error: '}Started \`${appStart}\` for a few seconds, then stopped it: it ${run.summary}.\n${run.output}`;
+    } else {
+      result = await applyWrite(deps.workspace, pending, deps.signal, (e) => deps.checkpoint.remember(e));
+    }
   } catch (err) {
     result = `Error: ${(err as Error).message}`;
   }
@@ -547,4 +605,14 @@ function abortError(): Error {
   const err = new Error('Stopped.');
   err.name = 'AbortError';
   return err;
+}
+
+/** The command line of a run_command call, or "" if its arguments don't parse. */
+function commandOf(call: ToolCall): string {
+  try {
+    const { command } = JSON.parse(call.function.arguments || '{}') as { command?: unknown };
+    return typeof command === 'string' ? command : '';
+  } catch {
+    return '';
+  }
 }

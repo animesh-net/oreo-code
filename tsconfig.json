@@ -13,5 +13,5 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["src", "test", "vitest.config.mts"]
+  "include": ["src", "test", "vitest.config.mts", "vitest.eval.config.mts"]
 }
