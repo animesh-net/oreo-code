@@ -271,6 +271,58 @@ describe('ChatController', () => {
     );
   });
 
+  it('keeps the chat across a reload, with its compacted beginning, until New chat', async () => {
+    let stored: unknown;
+    const sent: ChatMessage[][] = [];
+    const client = fakeClient((messages) => {
+      sent.push(messages);
+      return chunks('ok');
+    });
+    const storage = { loadChat: () => stored, saveChat: (chat: unknown) => (stored = chat) };
+    const first = setup(client, storage).controller;
+    await first.refresh();
+    await first.handle({ type: 'send', text: 'hi' });
+    expect(stored).toEqual({
+      messages: [
+        { role: 'user', content: 'hi' },
+        { role: 'assistant', content: 'ok' },
+      ],
+    });
+
+    // A summary saved with the chat stands in for its beginning after the reload too.
+    stored = { ...(stored as object), compacted: { upTo: 2, summary: 'They said hi.' } };
+    const second = setup(client, storage).controller;
+    expect(second.state.messages).toEqual([
+      { role: 'user', content: 'hi' },
+      { role: 'assistant', content: 'ok' },
+    ]);
+    await second.refresh();
+    await second.handle({ type: 'send', text: 'again' });
+    expect(sent[1].map((m) => m.content.split('\n')[0])).toEqual([
+      'Summary of the conversation so far (compacted to fit the context window):',
+      'again',
+    ]);
+    expect((stored as { messages: unknown[] }).messages).toHaveLength(4);
+
+    await second.handle({ type: 'newChat' });
+    expect(stored).toEqual({ messages: [] });
+    expect(setup(client, storage).controller.state.messages).toEqual([]);
+  });
+
+  it("doesn't save a turn that failed", async () => {
+    let stored: unknown;
+    const { controller } = setup(
+      fakeClient(async function* () {
+        yield 'partial';
+        throw new OllamaHttpError(404);
+      }),
+      { loadChat: () => stored, saveChat: (chat) => (stored = chat) },
+    );
+    await controller.refresh();
+    await controller.handle({ type: 'send', text: 'hi' });
+    expect((stored as { messages: unknown[] } | undefined)?.messages ?? []).toEqual([]);
+  });
+
   it('drops a failed turn and returns the text to the input', async () => {
     const { controller, posted } = setup(
       fakeClient(async function* () {

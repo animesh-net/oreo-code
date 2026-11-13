@@ -9,6 +9,7 @@ import type { CodeSymbol } from '../completion/symbols';
 import type { ModelClient, ToolCall, WireMessage } from '../ollama/client';
 import { buildSystemPrompt } from './context';
 import { compactWire, summaryMessage } from './compact';
+import { chatToSave, readSavedChat, type SavedChat } from './savedChat';
 import { cloudModels } from '../cloudflare/client';
 import { describeCloudflareError, isCloudLimitError } from '../cloudflare/errors';
 import { describeOllamaError, isUnreachable } from '../ollama/errors';
@@ -41,6 +42,9 @@ export interface ChatControllerDeps {
   /** Agent mode and "Apply edits without asking" as you last set them; remembered across reloads. */
   getAgentSettings?(): { agentMode?: boolean; approveEdits?: boolean };
   rememberAgentSettings?(settings: { agentMode: boolean; approveEdits: boolean }): void;
+  /** The chat saved for this workspace, so it comes back after a reload. */
+  loadChat?(): unknown;
+  saveChat?(chat: SavedChat): void;
   createClient(ollamaUrl: string): ModelClient;
   /**
    * Other addresses to try when nothing answers at a local URL (127.0.0.1 or
@@ -213,6 +217,8 @@ export class ChatController {
   private chatId = 0;
   /** The summary that stands in for the chat's first `upTo` messages once it was compacted. */
   private compacted?: { upTo: number; summary: string };
+  /** The chat as last saved, to save only when it changes. */
+  private savedChat?: string;
   /** What the last agent task changed, for "Undo task". */
   private checkpoint: Checkpoint | undefined;
 
@@ -220,6 +226,22 @@ export class ChatController {
     const saved = deps.getAgentSettings?.() ?? {};
     this.agentMode = saved.agentMode ?? false;
     this.approveEdits = saved.approveEdits ?? true;
+    const chat = readSavedChat(deps.loadChat?.());
+    if (chat) {
+      this.messages = chat.messages;
+      this.compacted = chat.compacted;
+      this.savedChat = JSON.stringify(chat);
+    }
+  }
+
+  /** Saves the chat when a turn is over, if it changed since it was last saved. */
+  private saveChat(): void {
+    if (this.busy || !this.deps.saveChat) return;
+    const chat = chatToSave({ messages: this.messages, compacted: this.compacted });
+    const json = JSON.stringify(chat);
+    if (json === this.savedChat) return;
+    this.savedChat = json;
+    this.deps.saveChat(chat);
   }
 
   private rememberAgentSettings(): void {
@@ -702,6 +724,7 @@ export class ChatController {
   }
 
   private publish(): void {
+    this.saveChat();
     const state = this.state;
     this.deps.post({ type: 'state', state });
     this.deps.onState?.(state);

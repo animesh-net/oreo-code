@@ -210,7 +210,10 @@ commit, pull request) through the local `github-mcp-server` over stdio.
   a tool result) stay; the summary is kept for later turns of the chat until New chat; a
   summary that fails or comes back empty leaves the prompt to `fitToContext`, and Stop still
   stops. The summary message tells the model to read a file again before changing it, and the
-  agent's record of the files it saw is cleared, since those copies are gone. A tool that fails goes back to the model as an error; the task goes on. Calls get unique ids, unparseable
+  agent's record of the files it saw is cleared, since those copies are gone. The chat and
+  its summary are saved per folder in `workspaceState` when a turn ends (`chatToSave`, oldest
+  turns dropped past `MAX_SAVED_CHARS`) and read back on activation through `readSavedChat`,
+  which keeps only well-formed messages; New chat clears it. A tool that fails goes back to the model as an error; the task goes on. Calls get unique ids, unparseable
   arguments are replaced with `{}` in the conversation, and the last round (no tools offered) runs no calls.
   A reply that only announces a next step (`announcesAction`) is not an answer: the model
   is told to do it, up to `MAX_NUDGES` times; a reply that claims changes (`claimsChanges`:
