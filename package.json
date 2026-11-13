@@ -2,6 +2,7 @@
   "name": "oreo-code",
   "displayName": "Oreo Code",
   "description": "Chat and coding agent on your Mac's Ollama, inside VS Code.",
+  "icon": "media/icon.png",
   "version": "1.0.0",
   "publisher": "animesh-net",
   "private": true,
