@@ -22,6 +22,7 @@ const LAST_MODEL_KEY = 'oreo.lastModel';
 // Kept from when effort was remembered per provider, so an earlier pick for the Mac's models carries over.
 const EFFORT_KEY = 'oreo.effort.macbook';
 const AGENT_SETTINGS_KEY = 'oreo.agentSettings';
+const CHAT_KEY = 'oreo.chat';
 
 let mcpHost: McpHost | undefined;
 
@@ -46,6 +47,9 @@ export function activate(context: vscode.ExtensionContext): void {
     rememberEffort: (effort) => void context.globalState.update(EFFORT_KEY, effort),
     getAgentSettings: () => context.globalState.get(AGENT_SETTINGS_KEY) ?? {},
     rememberAgentSettings: (settings) => void context.globalState.update(AGENT_SETTINGS_KEY, settings),
+    // Each folder keeps its own chat, back after a reload.
+    loadChat: () => context.workspaceState.get(CHAT_KEY),
+    saveChat: (chat) => void context.workspaceState.update(CHAT_KEY, chat),
     createClient: (ollamaUrl) => new OllamaClient(ollamaUrl),
     fallbackOllamaUrls: (ollamaUrl) => tailscaleOllamaUrls(ollamaUrl, os.networkInterfaces()),
     getWorkspace: currentWorkspace,

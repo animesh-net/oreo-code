@@ -116,6 +116,11 @@ export interface AgentDeps {
   question: number;
   /** Shrinks `wire` to fit the context window; returns the task's new index. */
   fit(wire: WireMessage[], question: number, maxChars: number): number;
+  /**
+   * Summarizes the earlier conversation once the prompt is nearly full (src/chat/compact.ts),
+   * with the model in use; returns the question's new index, or undefined if it didn't.
+   */
+  compact?(wire: WireMessage[], question: number, model: AgentModel): Promise<number | undefined>;
   effort: ReasoningEffort;
   signal: AbortSignal;
   /** Read-only tools (list, read, search, find_symbol) and how to run them. */
@@ -198,6 +203,14 @@ export async function runAgent(deps: AgentDeps): Promise<AgentResult> {
   let lastText = '';
   for (; n <= max;) {
     const offered = n < max ? tools : undefined;
+    const compacted = await deps.compact?.(deps.wire, question, current);
+    if (deps.signal.aborted) throw abortError();
+    if (compacted !== undefined) {
+      question = compacted;
+      // The copies the model had are summarized away: it reads a file again before editing it.
+      views.clear();
+      step({ title: 'Compacted the conversation to fit the context window', outcome: 'ok' });
+    }
     question = deps.fit(deps.wire, question, current.info.maxPromptChars);
     let text = '';
     lastText = '';
