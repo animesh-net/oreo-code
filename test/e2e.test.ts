@@ -190,6 +190,37 @@ describe('agent mode end to end, on disk', () => {
     expect(await fixture('broken-server').verify(ws)).toMatchObject({ passed: true });
   }, 60_000);
 
+  it('edits from the latest copy when a command changed the file after it was read', async () => {
+    const ws = await workspace('broken-server');
+    // A command (like a formatter) adds a header line, moving every line down by one.
+    const addHeader = `node -e "const f='server/index.js',fs=require('fs');fs.writeFileSync(f,'// server\\n'+fs.readFileSync(f,'utf8'))"`;
+    const { client, sent } = scripted([
+      [call('read_file', { path: 'server/index.js' })],
+      [call('run_command', { command: addHeader })],
+      [call('replace_lines', { path: 'server/index.js', start_line: 9, end_line: 12, new_text: '' })], // old numbers: refused
+      [call('replace_lines', { path: 'server/index.js', start_line: 10, end_line: 13, new_text: '' })],
+      [
+        call('replace_lines', {
+          path: 'server/index.js',
+          start_line: 16,
+          end_line: 16,
+          new_text: '    }\n}\n\ncreateServer(serve).listen(PORT);',
+        }),
+      ],
+      'Removed the existsSync check, closed serve() and started the server.',
+    ]);
+    const run = await runTask({ ws, client, modelId: 'oreo-4b', task: fixture('broken-server').task });
+
+    expect(run.error).toBeUndefined();
+    expect(sent[3].at(-1)?.content).toMatch(
+      /^Error: server\/index\.js changed since you last saw it[\s\S]*1: \/\/ server\n/,
+    );
+    // The second edit's result has the file as it now is, numbered for the next one.
+    expect(sent[4].at(-1)?.content).toMatch(/The latest copy of server\/index\.js[\s\S]*16:     delete server/);
+    expect(await readFile(path.join(ws.root, 'server/index.js'), 'utf8')).toMatch(/^\/\/ server\n/);
+    expect(await fixture('broken-server').verify(ws)).toMatchObject({ passed: true });
+  }, 30_000);
+
   it("doesn't let a fix that leaves the file broken end the task", async () => {
     const ws = await workspace('broken-server');
     const { client, sent } = scripted([

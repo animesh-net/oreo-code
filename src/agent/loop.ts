@@ -1,6 +1,7 @@
 import type { FunctionTool, ModelClient, ToolCall, WireMessage } from '../ollama/client';
 import type { AgentStep, ModelInfo, ReasoningEffort } from '../shared/protocol';
 import type { Checkpoint } from './checkpoint';
+import { latestCopyNote, numberedCopy, retireCopies } from './fileViews';
 import { describeProblems, newProblems, type Problem } from './instructions';
 import { needsApproval } from './policy';
 import { appStartIn, COMMAND_NOT_FOUND, MAX_VERIFY_ROUNDS, syntaxCheckCommand } from './verify';
@@ -11,6 +12,7 @@ import {
   isWriteTool,
   keepEnds,
   MAX_COMMAND_OUTPUT_CHARS,
+  cleanPath,
   prepareWrite,
   WRITE_TOOLS,
   type PendingWrite,
@@ -188,6 +190,8 @@ export async function runAgent(deps: AgentDeps): Promise<AgentResult> {
   /** The same for starting the app. */
   const start = { asked: false, allowed: false };
   let changesAtCheck = -1;
+  /** Each file as the model last saw it whole or in part (read, or after its own edit). */
+  const views = new Map<string, string>();
 
   let n = 1;
   /** The latest round's text, to tell whether the task ended mid-way at the step limit. */
@@ -308,8 +312,8 @@ export async function runAgent(deps: AgentDeps): Promise<AgentResult> {
       let result: string;
       try {
         result = isWriteTool(call.function.name)
-          ? await runWrite(deps, call, step, baseline, progress)
-          : await runRead(deps, call, step);
+          ? await runWrite(deps, call, step, baseline, progress, views)
+          : await runRead(deps, call, step, views);
       } catch (err) {
         if (deps.signal.aborted) throw err;
         // A tool that fails tells the model, which can try another way; the task goes on.
@@ -365,8 +369,21 @@ export async function runAgent(deps: AgentDeps): Promise<AgentResult> {
   return { reply, steps, model: current.info };
 }
 
-async function runRead(deps: AgentDeps, call: ToolCall, step: (s: AgentStep) => void): Promise<string> {
+async function runRead(
+  deps: AgentDeps,
+  call: ToolCall,
+  step: (s: AgentStep) => void,
+  seen: Map<string, string>,
+): Promise<string> {
   const result = await deps.runRead(call);
+  if (call.function.name === 'read_file' && !result.content.startsWith('Error')) {
+    const read = cleanPath(pathOf(call) ?? '');
+    try {
+      seen.set(read, await deps.workspace.readFile(read));
+    } catch {
+      // Gone since: the next change to it finds out.
+    }
+  }
   step({
     title: result.summary,
     detail: detail(call, result.content),
@@ -506,7 +523,19 @@ async function runWrite(
   step: (s: AgentStep) => void,
   baseline: Map<string, Problem[]>,
   progress: { changes: number; commands: number },
+  seen: Map<string, string>,
 ): Promise<string> {
+  // Line numbers and whole-file rewrites only make sense against the file as it is now:
+  // one that changed since the model saw it (a command, or you) is shown again first.
+  const stale = await staleView(deps, call, seen);
+  if (stale) {
+    step({
+      title: `Couldn't ${call.function.name.replace('_', ' ')} ${pathOf(call)}`,
+      detail: stale,
+      outcome: 'error',
+    });
+    return stale;
+  }
   // A command that starts the app would block until stopped, or leave a server nobody
   // can reach: run it the way the run check does, for a few seconds, and say what happened.
   const smoke = deps.workspace.smokeRun?.bind(deps.workspace);
@@ -558,6 +587,13 @@ async function runWrite(
     progress.changes++;
     if (deps.problems) {
       result += `\n${describeProblems(path, baseline.get(path) ?? [], await deps.problems(path, true))}`;
+    }
+    // The model goes on from this copy, never an earlier one.
+    const now = await deps.workspace.readFile(path).catch(() => undefined);
+    if (now !== undefined) {
+      seen.set(path, now);
+      retireCopies(deps.wire, path, numberedCopy(path, now) !== undefined);
+      result += latestCopyNote(path, now);
     }
     result = await withInstructions(deps, path, result);
   }
@@ -615,4 +651,28 @@ function commandOf(call: ToolCall): string {
   } catch {
     return '';
   }
+}
+
+/**
+ * For replace_lines and write_file: an error with the file's latest copy if the file
+ * changed since the model last saw it (a command or you changed it); undefined otherwise.
+ */
+async function staleView(deps: AgentDeps, call: ToolCall, seen: Map<string, string>): Promise<string | undefined> {
+  if (call.function.name !== 'replace_lines' && call.function.name !== 'write_file') return undefined;
+  const path = cleanPath(pathOf(call) ?? '');
+  if (!path) return undefined;
+  let now: string;
+  try {
+    now = await deps.workspace.readFile(path);
+  } catch {
+    return undefined; // Missing or unreadable: the tool itself says so.
+  }
+  const before = seen.get(path);
+  if (before === undefined || before === now) return undefined;
+  seen.set(path, now);
+  const why = `${path} changed since you last saw it`;
+  const copy = numberedCopy(path, now);
+  return copy
+    ? `Error: ${why}, so your line numbers or text may not match it. Nothing was changed. Here is its latest copy; make the change against it:\n${copy}`
+    : `Error: ${why}. Nothing was changed. Read it with read_file, then make the change against what you read.`;
 }
