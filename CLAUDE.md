@@ -126,6 +126,7 @@ commit, pull request) through the local `github-mcp-server` over stdio.
 | `src/agent/`                        | Tool catalog (namespacing, read/write, allowlist) and the write policy                                                     |
 | `src/agent/loop.ts`                 | Agent mode's loop: model calls, tool calls, approvals, step limit, move to the Mac on a limit                              |
 | `src/agent/writeTools.ts`           | Agent write tools (edit_file, create_file, run_command): path rules, diffs, applying                                       |
+| `src/agent/fileViews.ts`            | The latest copy of a changed file for the agent, and earlier copies taken out of its conversation                          |
 | `src/agent/checkpoint.ts`           | "Undo task": each changed file's text from before the task, in memory                                                      |
 | `src/agent/instructions.ts`         | The repository's instruction files for the agent, and the errors a change added                                            |
 | `src/agent/verify.ts`               | The project check and start command found from its files, run when the agent says it's done                                |
@@ -212,7 +213,12 @@ commit, pull request) through the local `github-mcp-server` over stdio.
   shows the changed lines with their new numbers) and `write_file` (a whole existing file
   up to `MAX_REWRITE_CHARS`, refusing "rest unchanged" placeholders) become an `edit_file`
   of the whole file, so they share its approval, `runsCode`, Undo and error checks: small
-  models like Oreo 4B can't reliably copy exact text. Agent calls use `AGENT_TEMPERATURE`
+  models like Oreo 4B can't reliably copy exact text. After every change the result ends
+  with the file's latest copy, numbered like read_file (`latestCopyNote`, up to
+  `MAX_READ_CHARS`), and earlier copies of it in the conversation (read_file results, older
+  edit results, whole-file arguments) are replaced with a note (`retireCopies`,
+  `src/agent/fileViews.ts`); `replace_lines` and `write_file` on a file that changed since
+  the model last saw it (a command or you) change nothing and show the latest copy. Agent calls use `AGENT_TEMPERATURE`
   (0.2) for steadier tool calls. The step limit is `MAX_AGENT_STEPS`, plus `STEPS_PER_FIX`
   for each failed check sent back; ending at it mid-way adds a note saying so. `run_command` refuses commands that only read or list
   files (`READS_FILES`), pointing to read_file, list_files and search.

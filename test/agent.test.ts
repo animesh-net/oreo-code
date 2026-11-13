@@ -1421,6 +1421,57 @@ describe('edits a small model can make', () => {
     expect(ws.files['server/index.js']).toBe('function a() {\n  run(\n}\n');
   });
 
+  it('keeps only the latest copy of a file the agent edits again and again', async () => {
+    const ws = memoryWorkspace({ 'a.js': 'one();\ntwo();\nthree();\n' });
+    const client = scripted([
+      [call('read_file', { path: 'a.js' })],
+      [call('replace_lines', { path: 'a.js', start_line: 1, end_line: 1, new_text: 'zero();\none();' }, 'c2')],
+      [call('write_file', { path: 'a.js', content: 'zero();\none();\ntwo();\nTHREE();\n' }, 'c3')],
+      [call('replace_lines', { path: 'a.js', start_line: 2, end_line: 2, new_text: 'ONE();' }, 'c4')],
+      'Done.',
+    ]);
+    const d = deps(client, ws, { approveEdits: () => true });
+    await runAgent(d);
+    expect(ws.files['a.js']).toBe('zero();\nONE();\ntwo();\nTHREE();\n');
+    const tool = (id: string) => d.wire.find((m) => m.role === 'tool' && m.tool_call_id === id)?.content ?? '';
+    // Every earlier copy points to the latest one; only the last result carries a copy.
+    expect(tool('c1')).toBe(
+      '(An older copy of a.js, removed: the file changed since. Its latest copy is further down.)',
+    );
+    expect(tool('c2')).toMatch(/^Edited a\.js\.[\s\S]*\(An older copy of a\.js, removed/);
+    expect(tool('c2')).not.toMatch(/The latest copy/);
+    expect(tool('c3')).not.toMatch(/THREE/);
+    expect(tool('c4')).toMatch(
+      /The latest copy of a\.js, with these line numbers \(earlier copies are out of date\):\na\.js \(5 lines\)\n1: zero\(\);\n2: ONE\(\);\n3: two\(\);\n4: THREE\(\);\n5: \n$/,
+    );
+    // The whole-file argument of the earlier rewrite is gone too.
+    const rewrite = d.wire
+      .flatMap((m) => (m.role === 'assistant' ? (m.tool_calls ?? []) : []))
+      .find((t) => t.id === 'c3');
+    expect(JSON.parse(rewrite?.function.arguments ?? '{}')).toEqual({ path: 'a.js', note: 'older copy removed' });
+  });
+
+  it('shows the latest copy instead of editing a file that changed since the agent saw it', async () => {
+    const ws = memoryWorkspace({ 'a.js': 'one();\ntwo();\n' });
+    ws.runCommand = async () => {
+      ws.files['a.js'] = '// formatted\none();\ntwo();\n'; // a formatter adds a line on top
+      return { exitCode: 0, output: '', timedOut: false };
+    };
+    const client = scripted([
+      [call('read_file', { path: 'a.js' })],
+      [call('run_command', { command: 'npm run format' }, 'c2')],
+      [call('replace_lines', { path: 'a.js', start_line: 2, end_line: 2, new_text: 'TWO();' }, 'c3')], // old numbering
+      [call('replace_lines', { path: 'a.js', start_line: 3, end_line: 3, new_text: 'TWO();' }, 'c4')],
+      'Done.',
+    ]);
+    const d = deps(client, ws, { approveEdits: () => true });
+    await runAgent(d);
+    expect(client.calls[3].wire.at(-1)?.content).toMatch(
+      /^Error: a\.js changed since you last saw it[\s\S]*Nothing was changed[\s\S]*1: \/\/ formatted\n2: one\(\);\n3: two\(\);/,
+    );
+    expect(ws.files['a.js']).toBe('// formatted\none();\nTWO();\n');
+  });
+
   it('still asks before rewriting a file that decides what runs', async () => {
     const ws = memoryWorkspace({ 'package.json': '{"scripts":{"test":"vitest"}}' });
     const client = scripted([
