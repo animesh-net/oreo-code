@@ -208,7 +208,11 @@ export async function prepareWrite(
           : rewriteFile(text, path, str('content'));
       if ('error' in made) return made;
       if (made.text.length > MAX_WRITE_CHARS) return { error: tooLarge(path) };
-      if (made.text === text) return { error: `Error: that leaves ${path} unchanged.` };
+      if (made.text === text) {
+        return {
+          error: `Error: that is exactly what ${path} already has, so nothing changed. Find the lines that are wrong and change them, with replace_lines or in your content.`,
+        };
+      }
       return {
         pending: {
           kind: 'edit_file',
