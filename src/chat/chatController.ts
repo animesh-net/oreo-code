@@ -10,10 +10,8 @@ import type { ModelClient, ToolCall, WireMessage } from '../ollama/client';
 import { buildSystemPrompt } from './context';
 import { compactWire, summaryMessage } from './compact';
 import { chatToSave, readSavedChat, type SavedChat } from './savedChat';
-import { cloudModels } from '../cloudflare/client';
-import { describeCloudflareError, isCloudLimitError } from '../cloudflare/errors';
 import { describeOllamaError, isUnreachable } from '../ollama/errors';
-import { inCatalogOrder, OREO_MODELS } from '../ollama/models';
+import { defaultModel } from '../ollama/models';
 import { isLoopbackUrl, normalizeOllamaUrl } from '../ollama/url';
 import {
   DEFAULT_EFFORT,
@@ -48,13 +46,9 @@ export interface ChatControllerDeps {
   createClient(ollamaUrl: string): ModelClient;
   /**
    * Other addresses to try when nothing answers at a local URL (127.0.0.1 or
-   * localhost): the Mac's Tailscale addresses, where oreo-ai's script binds Ollama.
+   * localhost): the Mac's Tailscale addresses, where Ollama may listen instead.
    */
   fallbackOllamaUrls?(ollamaUrl: string): string[];
-  /** Raw "oreo.cloudUrl" setting: oreo-ai's Workers AI relay. Empty turns the cloud models off. */
-  getCloudUrl?(): string;
-  /** The relay client for a valid cloud URL; its model list says which cloud models are usable. */
-  createCloudClient?(cloudUrl: string): ModelClient;
   /** The open folder, for the repo snapshot and the read-only tools; none if no folder is open. */
   getWorkspace?(): Workspace | undefined;
   /** The open folder with writing and commands, for agent mode; none if no folder is open. */
@@ -77,10 +71,9 @@ export interface ChatControllerDeps {
 export const EMPTY_REPLY = 'Oreo Code finished without an answer. Try again, or turn Thinking off.';
 
 /**
- * The models run with a 32K-token context (oreo-ai's Modelfiles) and Ollama cuts a
- * longer prompt without saying so. At roughly 3 characters a token for code, the
- * prompt is kept under this (about 22K tokens), leaving 8K for a thinking reply
- * (MAX_OUTPUT_TOKENS * 2) and the rest for the tool definitions and chat template.
+ * The prompt budget for a model whose context isn't known: what a 32K-token context
+ * allows (`promptBudget` in src/ollama/models.ts). Each listed model has its own,
+ * from the context Ollama runs it with; Ollama cuts a longer prompt without saying so.
  */
 export const MAX_PROMPT_CHARS = 66_000;
 const REMOVED = '(Removed to fit the context window.)';
@@ -199,8 +192,6 @@ export const MAX_TOOL_ROUNDS = 8;
 export class ChatController {
   private ollamaUrl = '';
   private client: ModelClient | undefined;
-  private cloud: ModelClient | undefined;
-  private cloudUrl = '';
   private models: ModelInfo[] = [];
   private selectedModel: string | undefined;
   private messages: ChatMessage[] = [];
@@ -251,7 +242,6 @@ export class ChatController {
   /** Re-reads the Ollama URL setting, then reloads the model list. */
   async refresh(): Promise<void> {
     const seq = ++this.refreshSeq;
-    const prior = this.selectedModel;
     this.error = undefined;
     this.client = undefined;
     this.models = [];
@@ -272,7 +262,7 @@ export class ChatController {
       this.models = models;
       this.selectedModel = pickModel(models, this.selectedModel, this.deps.getLastModel());
       if (!this.selectedModel) {
-        this.error = `Ollama at ${this.ollamaUrl} has none of the Oreo models. Create them from oreo-ai's Modelfiles.`;
+        this.error = `Ollama at ${this.ollamaUrl} has no models that can chat. Pull one with "ollama pull", then reload the window.`;
       }
     } catch (err) {
       if (seq !== this.refreshSeq) return;
@@ -282,46 +272,7 @@ export class ChatController {
       }
     }
     if (seq !== this.refreshSeq) return;
-    await this.addCloudModels(seq, prior);
-    if (seq !== this.refreshSeq) return;
     this.publish();
-  }
-
-  /**
-   * Lists the Workers AI models after the Mac's, usable when oreo-ai's relay lists them.
-   * They work even when Ollama is down, and the Mac's models when the relay is down; a
-   * problem is shown only if no model at all can be picked.
-   */
-  private async addCloudModels(seq: number, prior: string | undefined): Promise<void> {
-    this.cloud = undefined;
-    this.cloudUrl = '';
-    let inCloud = cloudModels();
-    let problem: string | undefined;
-    const raw = this.deps.getCloudUrl?.() ?? '';
-    if (raw.trim() && this.deps.createCloudClient) {
-      try {
-        const url = normalizeOllamaUrl(raw, 'oreo.cloudUrl');
-        const cloud = this.deps.createCloudClient(url);
-        try {
-          inCloud = await cloud.listModels();
-        } catch (err) {
-          problem = describeCloudflareError(err, url);
-        }
-        if (seq !== this.refreshSeq) return;
-        this.cloud = cloud;
-        this.cloudUrl = url;
-      } catch (err) {
-        problem = (err as Error).message;
-      }
-    }
-    const mac = this.models.length
-      ? this.models
-      : OREO_MODELS.filter((m) => m.provider === 'macbook').map((m) => ({ ...m, available: false }));
-    this.models = inCatalogOrder([...mac, ...inCloud]);
-    // Picked again from the full list, so a remembered cloud model isn't lost to the Mac's.
-    this.selectedModel = pickModel(this.models, prior, this.deps.getLastModel());
-    if (this.selectedModel) this.error = undefined;
-    else this.error ??= problem;
   }
 
   /** Looks for Ollama at the fallback addresses; uses the first that answers. */
@@ -337,7 +288,7 @@ export class ChatController {
         this.models = models;
         this.selectedModel = pickModel(models, this.selectedModel, this.deps.getLastModel());
         if (!this.selectedModel) {
-          this.error = `Ollama at ${this.ollamaUrl} has none of the Oreo models. Create them from oreo-ai's Modelfiles.`;
+          this.error = `Ollama at ${this.ollamaUrl} has no models that can chat. Pull one with "ollama pull", then reload the window.`;
         }
         return true;
       } catch {
@@ -433,10 +384,9 @@ export class ChatController {
 
   private async send(rawText: string): Promise<void> {
     const text = rawText.trim();
-    let model = this.selectedModel;
+    const model = this.selectedModel;
     const info = this.models.find((m) => m.id === model);
-    let inCloud = info?.provider === 'cloudflare';
-    const client = inCloud ? this.cloud : this.client;
+    const client = this.client;
     if (!text || this.busy || !client || !model) return;
 
     const turnStart = this.messages.length;
@@ -471,11 +421,6 @@ export class ChatController {
           onStep: (step) => {
             steps.push(step);
             this.deps.post({ type: 'step', step });
-          },
-          // After a move to the Mac, a failure is worded for the Mac model, not Cloudflare.
-          onMove: (moved) => {
-            model = moved.id;
-            inCloud = false;
           },
         });
         reply = result.reply;
@@ -546,9 +491,7 @@ export class ChatController {
         if (reply || steps.length) finish();
         else if (this.chatId === chat) this.messages.splice(turnStart);
       } else {
-        const message = inCloud
-          ? describeCloudflareError(err, this.cloudUrl)
-          : describeOllamaError(err, this.ollamaUrl, model);
+        const message = describeOllamaError(err, this.ollamaUrl, model);
         this.error = message;
         if (steps.length) {
           // An agent task that already used tools stays in the chat, so you can see (and undo) what it did.
@@ -575,7 +518,7 @@ export class ChatController {
     history: ChatMessage[],
     signal: AbortSignal,
     compact: Compactor,
-    on: { onText(delta: string): void; onStep(step: AgentStep): void; onMove(model: ModelInfo): void },
+    on: { onText(delta: string): void; onStep(step: AgentStep): void },
   ) {
     // Replaces the last task's undo only once this task changes a file.
     const checkpoint = new Checkpoint(() => {
@@ -595,8 +538,6 @@ export class ChatController {
     ];
     return runAgent({
       model,
-      fallback: model.info.provider === 'cloudflare' ? this.macFallback() : undefined,
-      isCloudLimit: isCloudLimitError,
       wire,
       question: wire.length - 1,
       fit: fitToContext,
@@ -616,7 +557,6 @@ export class ChatController {
       onText: on.onText,
       onThinking: () => this.deps.post({ type: 'thinking' }),
       onStep: on.onStep,
-      onMove: on.onMove,
       instructionsFor: (path) => instructions.forPath(path),
       problems: ws.problems?.bind(ws),
       checkCommand,
@@ -657,15 +597,6 @@ export class ChatController {
       if (this.chatId === chat) this.compacted = { upTo: turnStart, summary: result.summary };
       return result.question;
     };
-  }
-
-  /** The Mac model with tools ranked first, if Ollama has it: where agent mode goes when Cloudflare's limit is hit. */
-  private macFallback(): AgentModel | undefined {
-    if (!this.client) return undefined;
-    const info = this.models
-      .filter((m) => m.provider === 'macbook' && m.supportsTools && m.available && m.defaultRank !== undefined)
-      .sort((a, b) => (a.defaultRank ?? 0) - (b.defaultRank ?? 0))[0];
-    return info ? { client: this.client, info } : undefined;
   }
 
   /** Shows the approval card and waits for Approve or Reject; Stop counts as Reject. */
@@ -732,9 +663,8 @@ export class ChatController {
 }
 
 /**
- * Keeps the current choice if still available, else the last dropdown choice,
- * else the first available model (the default is listed first).
- * Models Ollama doesn't have are skipped.
+ * Keeps the current choice if still installed, else the last dropdown choice, else the
+ * default: the largest model that can use tools (`defaultModel`).
  */
 export function pickModel(
   models: ModelInfo[],
@@ -744,8 +674,5 @@ export function pickModel(
   const usable = models.filter((m) => m.available);
   if (current && usable.some((m) => m.id === current)) return current;
   if (preferred && usable.some((m) => m.id === preferred)) return preferred;
-  // Otherwise the usable model ranked first; one without a rank is never picked for you.
-  return usable
-    .filter((m) => m.defaultRank !== undefined)
-    .sort((a, b) => (a.defaultRank ?? 0) - (b.defaultRank ?? 0))[0]?.id;
+  return defaultModel(usable)?.id;
 }

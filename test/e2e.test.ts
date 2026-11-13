@@ -22,7 +22,6 @@ const OREO_4B: ModelInfo = {
   supportsTools: true,
   thinking: 'switch',
   maxPromptChars: 66_000,
-  defaultRank: 1,
   available: true,
 };
 

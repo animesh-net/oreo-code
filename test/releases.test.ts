@@ -27,6 +27,7 @@ describe('versions', () => {
   it('compares numerically', () => {
     expect(isNewer('0.2.10', '0.2.9')).toBe(true);
     expect(isNewer('0.3.0', '0.2.99')).toBe(true);
+    expect(isNewer('v1.0.0', '0.2.25')).toBe(true); // the major release reaches 0.2.x installs
     expect(isNewer('0.2.9', '0.2.9')).toBe(false);
     expect(isNewer('0.1.50', '0.2.0')).toBe(false);
   });

@@ -4,7 +4,7 @@ import { APIConnectionError, APIConnectionTimeoutError, APIError, APIUserAbortEr
 export function describeOllamaError(err: unknown, ollamaUrl: string, model?: string): string {
   if (err instanceof APIUserAbortError) return 'Stopped.';
   if (err instanceof APIConnectionTimeoutError) {
-    return "Ollama didn't start answering within 10 minutes. The Mac may be short of memory: try Thinking off, Oreo 2B or a new chat.";
+    return "Ollama didn't start answering within 10 minutes. The Mac may be short of memory: try Thinking off, a smaller model or a new chat.";
   }
   if (err instanceof APIConnectionError) return unreachable(ollamaUrl);
   const status = statusOf(err);
@@ -12,8 +12,8 @@ export function describeOllamaError(err: unknown, ollamaUrl: string, model?: str
   if (status === 404) {
     // Ollama's /v1 answers 404 when the model isn't installed.
     return model
-      ? `${model} isn't in Ollama. Run "ollama create ${model} -f Modelfile.${model}" with oreo-ai's Modelfile, or "ollama pull ${model}".`
-      : `That model isn't in Ollama. Create it from oreo-ai's Modelfiles with "ollama create", or "ollama pull" it.`;
+      ? `${model} isn't in Ollama any more. Pull it again with "ollama pull ${model}", or reload the window to list the models Ollama has now.`
+      : `That model isn't in Ollama any more. Reload the window to list the models Ollama has now.`;
   }
   if (status !== undefined) {
     return detail ? `Ollama answered ${status}: ${detail}` : `Ollama answered ${status}. Try again in a moment.`;

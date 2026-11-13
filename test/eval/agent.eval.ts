@@ -62,7 +62,7 @@ describe(`agent eval: ${model}, ${runs} run(s) per task`, () => {
       if (!found?.available) {
         throw new Error(
           probe.state.error ??
-            `${model} isn't installed in Ollama at ${probe.state.ollamaUrl}. Create it from oreo-ai's Modelfile, or set OREO_EVAL_MODEL.`,
+            `${model} isn't installed in Ollama at ${probe.state.ollamaUrl}. Pull it with "ollama pull", or set OREO_EVAL_MODEL to one Ollama has.`,
         );
       }
       console.log(`Using ${model} at ${probe.state.ollamaUrl}`);

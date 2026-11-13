@@ -103,14 +103,12 @@ fix/<name_fix>` from it, push the new name, then ask before deleting the old
 
 # This repo
 
-oreo-code is a VS Code extension that chats with the Oreo models on the Mac's own
-Ollama and two Workers AI models through oreo-ai's relay. It calls Ollama directly
-(`GET /api/tags` for the model list, `POST /v1/chat/completions` streamed over
-SSE) at the `oreo.ollamaUrl` setting. The Cloudflare models go through oreo-ai's
-relay on the Pi at the `oreo.cloudUrl` setting (`GET /models`, `POST
-/chat/completions`, relayed unchanged to Workers AI with the Pi's token), reachable
-over Tailscale only; nothing else of oreo-ai is used: no sign-in. The models are created from the Modelfiles in oreo-ai's
-`ollama/` folder. Now: sidebar chat, inline completion, local workspace tools and
+oreo-code is a VS Code extension that chats with the models on the Mac's own Ollama
+at the `oreo.ollamaUrl` setting, and nothing else: no other server, no sign-in, nothing
+leaves the Mac. At activation it lists Ollama's models (`GET /api/tags`) and asks what
+each can do (`POST /api/show`), then keeps that list for the session; chats go to
+`POST /v1/chat/completions` streamed over SSE, inline completion to the native
+`POST /api/generate`. Now: sidebar chat, inline completion, local workspace tools and
 agent mode with approval cards and undo; next: the agent's GitHub step (branch,
 commit, pull request) through the local `github-mcp-server` over stdio.
 
@@ -118,8 +116,7 @@ commit, pull request) through the local `github-mcp-server` over stdio.
 | ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
 | `src/extension.ts`                  | `activate()`: commands, sidebar view, status bar                                                                           |
 | `src/auth/`                         | Secrets in VS Code SecretStorage (the macOS Keychain)                                                                      |
-| `src/ollama/`                       | Ollama client (OpenAI-compatible), the fixed model list, URL check and error wording                                       |
-| `src/cloudflare/`                   | Workers AI client via oreo-ai's relay (model list, thinking, `<think>` filter), error wording                              |
+| `src/ollama/`                       | Ollama client (OpenAI-compatible), model discovery from Ollama, URL check and error wording                                |
 | `src/chat/`                         | Chat state and turns; no `vscode` imports, unit tested                                                                     |
 | `src/views/`                        | Webview host, CSP, message relay                                                                                           |
 | `src/mcp/`                          | Pinned `github-mcp-server` download, MCP host and stdio client                                                             |
@@ -155,27 +152,27 @@ commit, pull request) through the local `github-mcp-server` over stdio.
   `webview-ui/markdown.ts`: raw HTML off, images off, links limited to http and
   https. Keep the CSP in `src/views/chatViewProvider.ts` strict: no inline scripts,
   no remote content, no `unsafe-eval`.
-- **Cloudflare is opt-in.** Nothing goes to oreo-ai or Cloudflare unless a Cloudflare
-  model is picked (only the relay's `GET /models` runs to grey models in or out).
-  No Cloudflare token or account id anywhere in the extension: oreo-ai's relay on
-  the Pi holds the token, and network access over Tailscale is the access control.
-- **Models are named once** in `src/ollama/models.ts` (`OREO_MODELS`); no model id
-  anywhere else and no model editing. Display names are `Oreo <size>` (`Oreo 4B`, `Oreo 120B`); a Mac model's id is `oreo-<size>`. Ollama's `GET /api/tags` only marks which
-  are installed. The extension only offers a dropdown; agent mode uses only
-  models with `supportsTools: true`. A model without `defaultRank` is never picked
-  for you, and one with `thinking: 'none'` gets no Thinking menu and no
-  `reasoning_effort`.
-- **Models stay in sync with oreo-ai** ([animesh-net/oreo-ai](https://github.com/animesh-net/oreo-ai),
-  `src/OreoAi.Web/Models/OreoModels.cs`): same ids, labels and order — largest
-  first. Any model added, removed or renamed here must be changed there in the same
-  way, and the other way round.
-- **Completion stays on the Mac.** Inline completion uses only the model with
-  `completion: true` (`completionModel()`) on the Mac's Ollama, never oreo-ai or
-  Cloudflare. It reads only listed files, never secret files (`isSecretPath`) or
+- **Models come from Ollama.** `OllamaClient.listModels` (`src/ollama/client.ts`) lists
+  `GET /api/tags` and builds each model with `modelFrom` (`src/ollama/models.ts`) from
+  `POST /api/show`: `tools` → agent mode, `thinking` → the Thinking menu (`levels` for
+  gpt-oss, else `switch`; none → no menu and no `reasoning_effort`), the context from the
+  Modelfile's `num_ctx` (else `DEFAULT_CONTEXT_TOKENS`, Ollama's 4K default, capped at the
+  trained length) → `maxPromptChars` through `promptBudget`; a model without `completion`
+  (embeddings) and Ollama's cloud models (`remote_host`/`remote_model`, or a name ending in
+  `cloud`; they run on ollama.com) are left out, and one `/api/show` won't describe is offered for plain chat.
+  The menu is largest first (`inMenuOrder`); with nothing chosen, `defaultModel` picks the
+  largest with tools. No model id is written anywhere in the code. The list is read at
+  activation, when `oreo.ollamaUrl` changes, and from the Retry button after a failure,
+  never while a session goes on. Every model's `provider` is `macbook`, so the webview's
+  picker is unchanged.
+- **Completion stays on the Mac.** Inline completion uses only the smallest model with
+  `completion: true` (`completionModel(models)`: `insert` capability and a `qwen2` family,
+  since the prompt is Qwen2.5-Coder's) on the Mac's Ollama, asking for an 8K context
+  (`num_ctx`) on each request; with none installed it's off and the status bar says so. It reads only listed files, never secret files (`isSecretPath`) or
   files the root `.gitignore` ignores, in snippets and the symbol index alike. Its
   size limits live only in `src/completion/budget.ts`; the prompt follows
   Qwen2.5-Coder's repository-level fill-in-the-middle format.
-- **Testable core.** `src/chat/`, `src/ollama/`, `src/cloudflare/`, `src/mcp/`, `src/agent/`, `src/completion/` and `src/update/` have no `vscode` imports; VS
+- **Testable core.** `src/chat/`, `src/ollama/`, `src/mcp/`, `src/agent/`, `src/completion/` and `src/update/` have no `vscode` imports; VS
   Code wiring goes in `src/extension.ts`, `src/views/`, `src/auth/` and `src/workspace/`.
 - **Agent safety lives in code.** Only the write tools in `ALLOWED_WRITES`
   (`src/agent/catalog.ts`) are offered; a tool without `readOnlyHint: true` is a
@@ -223,7 +220,7 @@ commit, pull request) through the local `github-mcp-server` over stdio.
   shows the changed lines with their new numbers) and `write_file` (a whole existing file
   up to `MAX_REWRITE_CHARS`, refusing "rest unchanged" placeholders) become an `edit_file`
   of the whole file, so they share its approval, `runsCode`, Undo and error checks: small
-  models like Oreo 4B can't reliably copy exact text. After every change the result ends
+  models (4B and smaller) can't reliably copy exact text. After every change the result ends
   with the file's latest copy, numbered like read_file (`latestCopyNote`, up to
   `MAX_READ_CHARS`), and earlier copies of it in the conversation (read_file results, older
   edit results, whole-file arguments) are replaced with a note (`retireCopies`,
@@ -286,7 +283,7 @@ npm run package    # if package.json, .vscodeignore or esbuild.mjs changed
 
 A change to agent mode keeps `test/e2e.test.ts` passing (each fixture task must end with
 the fixture's own check passing) and adds a case there for any new model behaviour it
-handles; `npm run eval` on the Mac measures it with the real Oreo 4B.
+handles; `npm run eval` on the Mac measures it with a real small model (`oreo-4b` unless `OREO_EVAL_MODEL` says otherwise).
 
 `.husky/pre-commit` formats staged files with Prettier and checks README links;
 `.husky/commit-msg` rejects AI attribution trailers. CI checks the PR title, the

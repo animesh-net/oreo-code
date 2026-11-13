@@ -1,4 +1,3 @@
-import { completionModel } from '../ollama/models';
 import { BUDGET } from './budget';
 import { LruCache } from './cache';
 import { gatherSnippets, type ContextSources } from './context';
@@ -25,7 +24,7 @@ export interface CompletionRequest {
 export interface CompletionSettings {
   enabled: boolean;
   disabledLanguages: readonly string[];
-  /** The completion model is installed on the Mac's Ollama. */
+  /** A model that can write completions is installed on the Mac's Ollama. */
   modelInstalled: boolean;
   /** A chat reply is streaming from a Mac model: the 8 GB Mac shouldn't run both. */
   macChatBusy: boolean;
@@ -44,6 +43,7 @@ export function skipReason(req: CompletionRequest, settings: CompletionSettings)
 /** Ollama's native generate endpoint, raw, so the prompt's special tokens go through as written. */
 export async function generate(
   ollamaUrl: string,
+  model: string,
   prompt: string,
   numPredict: number,
   signal: AbortSignal,
@@ -54,12 +54,13 @@ export async function generate(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      model: completionModel().id,
+      model,
       prompt,
       raw: true,
       stream: false,
       keep_alive: KEEP_ALIVE,
-      options: { num_predict: numPredict, stop: [...STOP_TOKENS] },
+      // The native API takes num_ctx per request: the prompt fits even if the model's default is 4K.
+      options: { num_ctx: BUDGET.contextTokens, num_predict: numPredict, stop: [...STOP_TOKENS] },
     }),
     signal: AbortSignal.any([signal, timeout]),
   });
@@ -71,6 +72,8 @@ export async function generate(
 export interface EngineDeps {
   repoName(): string;
   ollamaUrl(): string | undefined;
+  /** The Ollama model that writes completions (`completionModel`); undefined if none is installed. */
+  model(): string | undefined;
   sources: ContextSources;
   fetchImpl?: FetchLike;
 }
@@ -86,7 +89,8 @@ export class CompletionEngine {
 
   async complete(req: CompletionRequest, signal: AbortSignal): Promise<string | undefined> {
     const url = this.deps.ollamaUrl();
-    if (!url) return undefined;
+    const model = this.deps.model();
+    if (!url || !model) return undefined;
     const key = `${req.path}\0${req.prefix.slice(-800)}\0${req.suffix.slice(0, 300)}`;
     const cached = this.cache.get(key);
     if (cached !== undefined) return cached || undefined;
@@ -105,7 +109,7 @@ export class CompletionEngine {
       snippets,
     });
     const numPredict = isMidLine(lineSuffix) ? BUDGET.outputTokensLine : BUDGET.outputTokensBlock;
-    const raw = await generate(url, prompt, numPredict, signal, this.deps.fetchImpl);
+    const raw = await generate(url, model, prompt, numPredict, signal, this.deps.fetchImpl);
     const text = trimCompletion(raw, { linePrefix, lineSuffix, suffix: req.suffix });
     this.cache.set(key, text ?? '');
     return text;

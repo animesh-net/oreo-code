@@ -1,7 +1,7 @@
 /**
- * Every size limit of a completion request, in one place. The completion model has an
- * 8K-token context (num_ctx 8192 in oreo-ai's Modelfile); tokens are estimated from
- * characters, which is close enough for code and costs nothing.
+ * Every size limit of a completion request, in one place. Each request asks Ollama for
+ * an 8K-token context (`num_ctx`), whatever the model's own default; tokens are
+ * estimated from characters, which is close enough for code and costs nothing.
  */
 export const BUDGET = {
   contextTokens: 8192,
