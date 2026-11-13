@@ -2,7 +2,7 @@
   "name": "oreo-code",
   "displayName": "Oreo Code",
   "description": "Chat and coding agent on your Mac's Ollama, inside VS Code.",
-  "version": "0.2.0",
+  "version": "1.0.0",
   "publisher": "animesh-net",
   "private": true,
   "license": "MIT",
@@ -90,7 +90,7 @@
         "oreo.ollamaUrl": {
           "type": "string",
           "default": "http://127.0.0.1:11434",
-          "markdownDescription": "Base URL of Ollama, which serves the Oreo models. On a local address (the default), the Mac's Tailscale address is tried too when nothing answers, as oreo-ai's script makes Ollama listen there."
+          "markdownDescription": "Base URL of the Mac's Ollama. Its installed models are listed when VS Code starts (and when this changes), with what each can do read from Ollama. On a local address (the default), the Mac's Tailscale address is tried too when nothing answers."
         },
         "oreo.githubMcp.path": {
           "type": "string",
@@ -102,15 +102,10 @@
           "default": true,
           "markdownDescription": "Install new Oreo Code releases from GitHub on its own (at start-up and every 6 hours), then offer a reload. Uses the GitHub token from `Oreo Code: Set GitHub token`, which needs Contents (read) on `animesh-net/oreo-code`."
         },
-        "oreo.cloudUrl": {
-          "type": "string",
-          "default": "https://ai.animesh.org.in/v1",
-          "markdownDescription": "oreo-ai's Workers AI relay on the Pi, reachable over Tailscale only, for the Cloudflare models (Oreo 30B, Oreo 120B). oreo-ai holds the Cloudflare token; what you send these models leaves the Mac. Leave empty to turn the Cloudflare models off."
-        },
         "oreo.completion.enabled": {
           "type": "boolean",
           "default": true,
-          "markdownDescription": "Inline code completion (ghost text) from Oreo 1.5B on the Mac's Ollama, with snippets from this repository. Nothing is sent to oreo-ai or Cloudflare."
+          "markdownDescription": "Inline code completion (ghost text) from the smallest Qwen2.5-Coder model on the Mac's Ollama, with snippets from this repository. Nothing leaves the Mac."
         },
         "oreo.completion.disabledLanguages": {
           "type": "array",

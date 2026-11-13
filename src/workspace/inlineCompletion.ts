@@ -21,7 +21,7 @@ export interface SharedSymbols {
 /**
  * Inline completion (ghost text) from the Mac's completion model, with snippets from
  * the repository: imported files, definitions from the symbol index, and open and
- * recently edited files. Only the Mac's Ollama is called; nothing goes to oreo-ai.
+ * recently edited files. Only the Mac's Ollama is called; nothing leaves the Mac.
  */
 export function registerInlineCompletion(
   context: vscode.ExtensionContext,
@@ -119,6 +119,7 @@ export function registerInlineCompletion(
   const engine = new CompletionEngine({
     repoName: () => currentWorkspace()?.name ?? 'workspace',
     ollamaUrl: () => getState()?.ollamaUrl || undefined,
+    model: () => completionModel(getState()?.models ?? [])?.id,
     sources: {
       listFiles: async () => (await currentWorkspace()?.listFiles()) ?? [],
       readFile: async (p) => {
@@ -134,13 +135,11 @@ export function registerInlineCompletion(
 
   const settings = (): CompletionSettings => {
     const state = getState();
-    const model = completionModel();
-    const selected = state?.models.find((m) => m.id === state.selectedModel);
     return {
       enabled: config().get<boolean>('enabled', true),
       disabledLanguages: config().get<string[]>('disabledLanguages', ['plaintext', 'markdown']),
-      modelInstalled: !!state?.models.find((m) => m.id === model.id)?.available,
-      macChatBusy: !!state?.busy && selected?.provider === 'macbook',
+      modelInstalled: !!completionModel(state?.models ?? []),
+      macChatBusy: !!state?.busy,
     };
   };
 
@@ -185,13 +184,14 @@ export function registerInlineCompletion(
   status.command = 'oreo.toggleCompletion';
   const updateStatus = () => {
     const s = settings();
-    const name = completionModel().name;
+    const name = completionModel(getState()?.models ?? [])?.name ?? '';
     if (!s.enabled) {
       status.text = '$(circle-slash) Completion';
       status.tooltip = 'Oreo Code completion is off. Click to turn it on.';
     } else if (!s.modelInstalled) {
       status.text = '$(warning) Completion';
-      status.tooltip = `${completionModel().id} isn't installed on the Mac's Ollama. Create it from oreo-ai's ollama/Modelfile.${completionModel().id}.`;
+      status.tooltip =
+        'No model on the Mac\'s Ollama can write completions. Pull a Qwen2.5-Coder model, e.g. "ollama pull qwen2.5-coder:1.5b-base", then reload the window.';
     } else {
       status.text = `$(sparkle) ${name}`;
       status.tooltip = `Oreo Code completion from ${name} on the Mac. Click to turn it off.`;

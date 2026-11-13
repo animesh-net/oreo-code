@@ -34,7 +34,7 @@ export const MALFORMED_TWICE =
   "The model sent tool calls it couldn't make twice in a row, so the task stopped. Try again, or pick a larger model.";
 const REJECTED = 'The user rejected this. Do not try it again; ask what they want instead, or take another approach.';
 
-/** Agent mode's sampling temperature: low, so small models (Oreo 4B) keep to the tool format. */
+/** Agent mode's sampling temperature: low, so small models (4B and smaller) keep to the tool format. */
 export const AGENT_TEMPERATURE = 0.2;
 
 /** How many times a task may be told to carry out what it announced. */
@@ -106,10 +106,6 @@ export interface AgentModel {
 
 export interface AgentDeps {
   model: AgentModel;
-  /** A Mac model to move to if Cloudflare's limits stop a cloud model mid-task. */
-  fallback?: AgentModel;
-  /** True when an error is Cloudflare's daily allowance or rate limit. */
-  isCloudLimit(err: unknown): boolean;
   /** System prompt, earlier turns and the task, as sent to the model. Changed in place. */
   wire: WireMessage[];
   /** Index of the task in `wire`. */
@@ -135,8 +131,6 @@ export interface AgentDeps {
   onText(delta: string): void;
   onThinking(): void;
   onStep(step: AgentStep): void;
-  /** Called when the task moves to the fallback model, so errors after it are worded for that model. */
-  onMove?(model: ModelInfo): void;
   /** A folder's own instruction files (AGENTS.md, CLAUDE.md) not given yet, for a path the agent works on. */
   instructionsFor?(path: string): Promise<string>;
   /** Errors VS Code's language support reports in a file; `wait` lets it re-check after a change first. */
@@ -175,8 +169,7 @@ export async function runAgent(deps: AgentDeps): Promise<AgentResult> {
     steps.push(s);
     deps.onStep(s);
   };
-  let current = deps.model;
-  let moved = false;
+  const current = deps.model;
   let question = deps.question;
   let reply = '';
   let malformedRounds = 0;
@@ -216,39 +209,25 @@ export async function runAgent(deps: AgentDeps): Promise<AgentResult> {
     lastText = '';
     let calls: ToolCall[] | undefined;
     let thinking = false;
-    try {
-      for await (const event of current.client.streamChat(
-        current.info.id,
-        deps.wire,
-        deps.signal,
-        deps.effort,
-        offered,
-        AGENT_TEMPERATURE,
-      )) {
-        if (event.type === 'toolCalls') {
-          calls = event.calls;
-        } else if (event.type === 'thinking') {
-          if (!thinking) deps.onThinking();
-          thinking = true;
-        } else {
-          const delta = !text && reply ? `\n\n${event.text}` : event.text;
-          text += event.text;
-          reply += delta;
-          deps.onText(delta);
-        }
+    for await (const event of current.client.streamChat(
+      current.info.id,
+      deps.wire,
+      deps.signal,
+      deps.effort,
+      offered,
+      AGENT_TEMPERATURE,
+    )) {
+      if (event.type === 'toolCalls') {
+        calls = event.calls;
+      } else if (event.type === 'thinking') {
+        if (!thinking) deps.onThinking();
+        thinking = true;
+      } else {
+        const delta = !text && reply ? `\n\n${event.text}` : event.text;
+        text += event.text;
+        reply += delta;
+        deps.onText(delta);
       }
-    } catch (err) {
-      const canMove =
-        !moved && !text && deps.fallback && current.info.provider === 'cloudflare' && deps.isCloudLimit(err);
-      if (deps.signal.aborted || !canMove || !deps.fallback) throw err;
-      moved = true;
-      current = deps.fallback;
-      deps.onMove?.(current.info);
-      step({
-        title: `Cloudflare's limit is reached; moved to ${current.info.name} on the Mac`,
-        outcome: 'error',
-      });
-      continue; // Same step again, on the Mac.
     }
     n++;
     lastText = text;

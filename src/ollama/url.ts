@@ -1,6 +1,6 @@
 /**
- * Validates the "oreo.ollamaUrl" setting (or another URL setting, such as
- * "oreo.cloudUrl") and strips trailing slashes, so paths can be appended safely.
+ * Validates the "oreo.ollamaUrl" setting and strips trailing slashes, so paths can be
+ * appended safely.
  * Throws with a readable message.
  */
 export function normalizeOllamaUrl(raw: string, setting = 'oreo.ollamaUrl'): string {
@@ -34,8 +34,8 @@ interface InterfaceAddress {
 }
 
 /**
- * Where else Ollama may be on this Mac: oreo-ai's `scripts/oreo-ai.sh models` makes it
- * listen only on the Mac's Tailscale address (100.64.0.0/10), so the Pi can reach it.
+ * Where else Ollama may be on this Mac: it can be set to listen only on the Mac's
+ * Tailscale address (100.64.0.0/10), so other devices can reach it.
  * Takes `os.networkInterfaces()` and keeps the configured URL's scheme and port.
  */
 export function tailscaleOllamaUrls(

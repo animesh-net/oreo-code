@@ -1,7 +1,7 @@
 import OpenAI from 'openai';
 import type { ModelInfo, ReasoningEffort } from '../shared/protocol';
 import { OllamaHttpError } from './errors';
-import { modelsFromTags, thinkingOf } from './models';
+import { inMenuOrder, modelFrom, tagsFrom, type ShowResponse } from './models';
 
 /** A message as sent to Ollama, including the system prompt and tool turns. */
 export type WireMessage =
@@ -43,17 +43,20 @@ type FetchLike = typeof fetch;
 
 export const FIRST_TOKEN_TIMEOUT_MS = 10 * 60_000;
 
-/** Room for the answer; doubled when the model thinks first, as in oreo-ai. */
+/** Room for the answer; doubled when the model thinks first. */
 export const MAX_OUTPUT_TOKENS = 4096;
 
 /**
  * Talks to Ollama on this Mac (or wherever "oreo.ollamaUrl" points):
- *  - GET  {ollama}/api/tags               -> which Oreo models are installed
+ *  - GET  {ollama}/api/tags               -> the installed models
+ *  - POST {ollama}/api/show               -> what each can do (tools, thinking, context)
  *  - POST {ollama}/v1/chat/completions    -> OpenAI-compatible, streamed over SSE
  * Ollama needs no API key; the SDK insists on one, so a placeholder is sent.
  */
 export class OllamaClient implements ModelClient {
   private readonly openai: OpenAI;
+  /** Each listed model's thinking style, for what to send with a chat. */
+  private readonly thinking = new Map<string, ModelInfo['thinking']>();
 
   constructor(
     private readonly ollamaUrl: string,
@@ -77,7 +80,30 @@ export class OllamaClient implements ModelClient {
       signal,
     });
     if (!res.ok) throw new OllamaHttpError(res.status, await readMessage(res));
-    return modelsFromTags(await res.json());
+    const tags = tagsFrom(await res.json());
+    const models = await Promise.all(tags.map(async (tag) => modelFrom(tag, await this.show(tag.name, signal))));
+    const usable = models.filter((m): m is ModelInfo => !!m);
+    this.thinking.clear();
+    for (const m of usable) this.thinking.set(m.id, m.thinking);
+    return inMenuOrder(usable);
+  }
+
+  /** What Ollama says a model can do; undefined if it won't say, so it's offered for plain chat. */
+  private async show(model: string, signal?: AbortSignal): Promise<ShowResponse | undefined> {
+    try {
+      const res = await this.fetchImpl(`${this.ollamaUrl}/api/show`, {
+        method: 'POST',
+        headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model }),
+        signal,
+      });
+      if (!res.ok) return undefined;
+      const body: unknown = await res.json();
+      return body && typeof body === 'object' ? (body as ShowResponse) : undefined;
+    } catch (err) {
+      if (signal?.aborted) throw err;
+      return undefined;
+    }
   }
 
   async *streamChat(
@@ -91,13 +117,14 @@ export class OllamaClient implements ModelClient {
     // Ollama's /v1 honours reasoning_effort: "none" turns thinking off, and on a model
     // that can only think or not (qwen3.5) any level turns it on. A model that can't
     // think gets none at all.
-    const thinks = thinkingOf(model) !== 'none' && effort !== 'none';
+    const style = this.thinking.get(model) ?? 'none';
+    const thinks = style !== 'none' && effort !== 'none';
     const stream = await this.openai.chat.completions.create(
       {
         model,
         messages: messages as OpenAI.Chat.ChatCompletionMessageParam[],
         stream: true,
-        ...(thinkingOf(model) === 'none' ? {} : { reasoning_effort: effort }),
+        ...(style === 'none' ? {} : { reasoning_effort: effort }),
         // Without a cap a small model can run on until the context is full, and once
         // Ollama shifts the context it loses its place and repeats itself.
         max_tokens: thinks ? MAX_OUTPUT_TOKENS * 2 : MAX_OUTPUT_TOKENS,
@@ -110,12 +137,12 @@ export class OllamaClient implements ModelClient {
   }
 }
 
-/** The chunk fields both Ollama's /v1 and Workers AI's /ai/v1 stream. */
+/** The chunk fields Ollama's /v1 streams. */
 type Chunk = OpenAI.Chat.ChatCompletionChunk;
 
 /**
  * Turns an OpenAI-style stream into events: text as it arrives, a sign the model is
- * thinking (Ollama sends `delta.reasoning`, Workers AI `delta.reasoning_content`;
+ * thinking (Ollama sends `delta.reasoning`, some servers `delta.reasoning_content`;
  * only their presence is passed on), and the tool calls once the stream ends, joined
  * from pieces that arrive by index. `filter` may rewrite or drop text pieces.
  */

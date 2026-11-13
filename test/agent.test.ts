@@ -1,4 +1,3 @@
-import { APIError } from 'openai';
 import { describe, expect, it } from 'vitest';
 import { Checkpoint } from '../src/agent/checkpoint';
 import { describeProblems, Instructions, newProblems, type Problem } from '../src/agent/instructions';
@@ -42,7 +41,6 @@ import {
 } from '../src/agent/writeTools';
 import { runWorkspaceTool, WORKSPACE_TOOLS } from '../src/agent/workspaceTools';
 import { ChatController, fitToContext } from '../src/chat/chatController';
-import { isCloudLimitError } from '../src/cloudflare/errors';
 import type { CodeSymbol } from '../src/completion/symbols';
 import type { FunctionTool, ModelClient, StreamEvent, ToolCall, WireMessage } from '../src/ollama/client';
 import type { AgentStep, ModelInfo, ToWebview } from '../src/shared/protocol';
@@ -90,7 +88,6 @@ const model = (over: Partial<ModelInfo> = {}): ModelInfo => ({
   supportsTools: true,
   thinking: 'switch',
   maxPromptChars: 66_000,
-  defaultRank: 1,
   available: true,
   ...over,
 });
@@ -132,7 +129,6 @@ function deps(
     steps,
     approvals,
     model: { client, info: model() },
-    isCloudLimit: isCloudLimitError,
     wire,
     question: 1,
     fit: fitToContext,
@@ -495,24 +491,6 @@ describe('agent loop', () => {
     expect(malformedProblem(call('read_file', ''), names)).toBeUndefined();
   });
 
-  it("moves to the Mac model when Cloudflare's limit is hit mid-task", async () => {
-    const ws = memoryWorkspace({ 'a.ts': 'x' });
-    const limit = new APIError(429, { message: 'daily free allocation' }, undefined, undefined);
-    const cloud = scripted([[call('list_files', {})], limit]);
-    const mac = scripted(['Finished on the Mac.']);
-    const moves: string[] = [];
-    const d = deps(cloud, ws, {
-      model: { client: cloud, info: model({ id: '@cf/x', name: 'Oreo 30B', provider: 'cloudflare' }) },
-      fallback: { client: mac, info: model() },
-      onMove: (m) => moves.push(m.id),
-    });
-    const result = await runAgent(d);
-    expect(result.reply).toBe('Finished on the Mac.');
-    expect(result.model.id).toBe('oreo-4b');
-    expect(moves).toEqual(['oreo-4b']);
-    expect(d.steps.some((s) => /moved to Oreo 4B/.test(s.title))).toBe(true);
-  });
-
   it('gives calls without an id, or with a repeated one, their own id', async () => {
     const ws = memoryWorkspace({ 'a.ts': 'x' });
     const client = scripted([
@@ -567,16 +545,6 @@ describe('agent loop', () => {
     expect(result.reply).toBe('Finished after 1 tool call.');
   });
 
-  it('stops with the error when there is no Mac model to move to', async () => {
-    const ws = memoryWorkspace({});
-    const limit = new APIError(429, { message: 'rate limited' }, undefined, undefined);
-    const cloud = scripted([limit]);
-    const d = deps(cloud, ws, {
-      model: { client: cloud, info: model({ id: '@cf/x', provider: 'cloudflare' }) },
-    });
-    await expect(runAgent(d)).rejects.toBe(limit);
-  });
-
   it('ends cleanly on Stop, even while waiting for approval', async () => {
     const ws = memoryWorkspace({ 'a.ts': 'x' });
     const abort = new AbortController();
@@ -612,13 +580,6 @@ describe('agent loop', () => {
     expect(calls[0].function.arguments.length).toBeLessThan(300);
     expect(calls[1].function.arguments).toBe('{}');
     expect(wire).toHaveLength(5); // the task and every call keep their results
-  });
-
-  it('knows Cloudflare limit errors from other failures', () => {
-    expect(isCloudLimitError(new APIError(429, {}, undefined, undefined))).toBe(true);
-    expect(isCloudLimitError(new Error('3036: You have used up your daily free allocation'))).toBe(true);
-    expect(isCloudLimitError(new APIError(500, {}, undefined, undefined))).toBe(false);
-    expect(isCloudLimitError(new Error('fetch failed'))).toBe(false);
   });
 });
 
@@ -768,7 +729,7 @@ describe('agent mode in the chat', () => {
   });
 
   it('keeps chatting normally with a model that has no tools, even in agent mode', async () => {
-    const twoB = model({ id: 'oreo-2b', name: 'Oreo 2B', supportsTools: false, defaultRank: 1 });
+    const twoB = model({ id: 'oreo-2b', name: 'Oreo 2B', supportsTools: false });
     const { controller, client } = await setup(['Plain answer.'], [twoB]);
     await controller.handle({ type: 'setAgentMode', on: true });
     await controller.handle({ type: 'send', text: 'hi' });

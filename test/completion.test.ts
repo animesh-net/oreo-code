@@ -16,7 +16,6 @@ import { STOP_TOKENS, trimCompletion } from '../src/completion/postprocess';
 import { buildPrompt, keepEnd, keepStart, packSnippets, type Snippet } from '../src/completion/prompt';
 import { bestWindows, identifiers, jaccard } from '../src/completion/similarity';
 import { extractSymbols, INDEX_LIMITS, SymbolIndex } from '../src/completion/symbols';
-import { completionModel } from '../src/ollama/models';
 
 const snippet = (path: string, text: string, score: number, startLine = 0): Snippet => ({
   path,
@@ -344,6 +343,7 @@ describe('completion engine', () => {
     const engine = new CompletionEngine({
       repoName: () => 'oreo-code',
       ollamaUrl: () => 'http://127.0.0.1:11434',
+      model: () => 'qwen2.5-coder:1.5b-base',
       sources: emptySources,
       fetchImpl: fetchImpl as unknown as typeof fetch,
     });
@@ -353,8 +353,8 @@ describe('completion engine', () => {
     const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe('http://127.0.0.1:11434/api/generate');
     const body = JSON.parse(String(init.body));
-    expect(body).toMatchObject({ model: completionModel().id, raw: true, stream: false, keep_alive: KEEP_ALIVE });
-    expect(body.model).toBe('oreo-1.5b');
+    expect(body).toMatchObject({ model: 'qwen2.5-coder:1.5b-base', raw: true, stream: false, keep_alive: KEEP_ALIVE });
+    expect(body.options.num_ctx).toBe(BUDGET.contextTokens); // fits even where the model's default is 4K
     expect(body.options.num_predict).toBe(BUDGET.outputTokensBlock);
     expect(body.options.stop).toEqual([...STOP_TOKENS]);
     expect(body.prompt).toMatch(/^<\|repo_name\|>oreo-code\n/);
@@ -365,6 +365,7 @@ describe('completion engine', () => {
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ response: 'b' })));
     await generate(
       'http://h',
+      'coder',
       'p',
       BUDGET.outputTokensLine,
       new AbortController().signal,
@@ -373,6 +374,7 @@ describe('completion engine', () => {
     const engine = new CompletionEngine({
       repoName: () => 'r',
       ollamaUrl: () => 'http://h',
+      model: () => 'coder',
       sources: emptySources,
       fetchImpl: fetchImpl as unknown as typeof fetch,
     });
@@ -386,6 +388,7 @@ describe('completion engine', () => {
     const engine = new CompletionEngine({
       repoName: () => 'r',
       ollamaUrl: () => 'http://h',
+      model: () => 'coder',
       sources: emptySources,
       fetchImpl: fetchImpl as unknown as typeof fetch,
     });
@@ -393,10 +396,19 @@ describe('completion engine', () => {
     const none = new CompletionEngine({
       repoName: () => 'r',
       ollamaUrl: () => undefined,
+      model: () => 'coder',
       sources: emptySources,
       fetchImpl: fetchImpl as unknown as typeof fetch,
     });
     expect(await none.complete(req, new AbortController().signal)).toBeUndefined();
+    const noModel = new CompletionEngine({
+      repoName: () => 'r',
+      ollamaUrl: () => 'http://h',
+      model: () => undefined,
+      sources: emptySources,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    expect(await noModel.complete(req, new AbortController().signal)).toBeUndefined();
   });
 
   it('skips when off, in a disabled language, without the model, during a Mac chat reply or with a selection', () => {

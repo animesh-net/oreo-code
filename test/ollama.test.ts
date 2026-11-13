@@ -2,7 +2,17 @@ import { APIConnectionError, APIConnectionTimeoutError, APIError } from 'openai'
 import { describe, expect, it } from 'vitest';
 import { FIRST_TOKEN_TIMEOUT_MS, MAX_OUTPUT_TOKENS, OllamaClient } from '../src/ollama/client';
 import { describeOllamaError, OllamaHttpError } from '../src/ollama/errors';
-import { modelsFromTags, OREO_MODELS } from '../src/ollama/models';
+import {
+  billions,
+  completionModel,
+  contextTokens,
+  defaultModel,
+  DEFAULT_CONTEXT_TOKENS,
+  modelFrom,
+  promptBudget,
+  tagsFrom,
+  type ShowResponse,
+} from '../src/ollama/models';
 
 const ollama = 'http://127.0.0.1:11434';
 
@@ -21,64 +31,133 @@ function sseResponse(chunks: string[]): Response {
   return new Response(body, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
 }
 
-describe('OREO_MODELS', () => {
-  it('offers two models on Workers AI and three on the Mac, largest first as in oreo-ai', () => {
-    expect(
-      OREO_MODELS.map((m) => [m.id, m.provider, m.supportsTools, m.thinking, m.maxPromptChars, m.defaultRank]),
-    ).toEqual([
-      ['@cf/openai/gpt-oss-120b', 'cloudflare', true, 'levels', 200_000, 4],
-      ['@cf/qwen/qwen3-30b-a3b-fp8', 'cloudflare', true, 'switch', 66_000, 3],
-      ['oreo-4b', 'macbook', true, 'switch', 66_000, 1],
-      ['oreo-2b', 'macbook', false, 'switch', 66_000, 2],
-      ['oreo-1.5b', 'macbook', false, 'none', 10_000, undefined],
-    ]);
-  });
+/** What /api/show says of the models in these tests, like Ollama does for them. */
+const SHOW: Record<string, ShowResponse> = {
+  'qwen3.5:4b': {
+    capabilities: ['completion', 'tools', 'thinking'],
+    details: { family: 'qwen35', parameter_size: '4.0B' },
+    model_info: { 'qwen35.context_length': 262144 },
+    parameters: 'num_ctx 32768\ntemperature 0.6',
+  },
+  'qwen3.5:2b': {
+    capabilities: ['completion', 'thinking'],
+    details: { family: 'qwen35', parameter_size: '2.0B' },
+    model_info: { 'qwen35.context_length': 262144 },
+  },
+  'qwen2.5-coder:1.5b-base': {
+    capabilities: ['completion', 'insert'],
+    details: { family: 'qwen2', parameter_size: '1.5B' },
+    model_info: { 'qwen2.context_length': 32768 },
+  },
+  'gpt-oss:20b': {
+    capabilities: ['completion', 'tools', 'thinking'],
+    details: { family: 'gptoss', parameter_size: '20.9B' },
+  },
+  'nomic-embed-text:latest': { capabilities: ['embedding'], details: { family: 'nomic-bert', parameter_size: '137M' } },
+};
 
-  it('names every model "Oreo <size>", and a Mac model\'s id "oreo-<size>"', () => {
-    expect(OREO_MODELS.map((m) => m.name)).toEqual(['Oreo 120B', 'Oreo 30B', 'Oreo 4B', 'Oreo 2B', 'Oreo 1.5B']);
-    for (const m of OREO_MODELS) {
-      expect(m.name).toMatch(/^Oreo \d+(\.\d+)?B$/);
-      if (m.provider === 'macbook') expect(m.id).toBe(m.name.toLowerCase().replace(' ', '-'));
+/** A fetch that answers /api/tags and /api/show like Ollama with these models, and the rest with `rest`. */
+function fakeOllama(names: string[], rest: (url: string, init?: RequestInit) => Response = () => sseResponse(['ok'])) {
+  const calls: string[] = [];
+  const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    calls.push(url.endsWith('/api/show') ? `show ${JSON.parse(String(init?.body)).model}` : url);
+    if (url.endsWith('/api/tags')) return jsonResponse(200, { models: names.map((name) => ({ name, model: name })) });
+    if (url.endsWith('/api/show')) {
+      const show = SHOW[JSON.parse(String(init?.body)).model as string];
+      return show ? jsonResponse(200, show) : jsonResponse(404, { error: 'not found' });
     }
-  });
-});
+    return rest(url, init);
+  }) as typeof fetch;
+  return { fetchImpl, calls };
+}
 
-describe('modelsFromTags', () => {
-  it('marks a model available under its id or its id + ":latest"', () => {
-    const models = modelsFromTags({ models: [{ name: 'oreo-4b:latest' }, { name: 'qwen3.5:2b' }] });
-    expect(models.map((m) => [m.id, m.available])).toEqual([
-      ['oreo-4b', true],
-      ['oreo-2b', false],
-      ['oreo-1.5b', false],
+describe('models from Ollama', () => {
+  it('reads what each model can do from /api/show', () => {
+    const m = (name: string) =>
+      modelFrom({ name, parameterSize: SHOW[name].details?.parameter_size as string }, SHOW[name]);
+    expect(m('qwen3.5:4b')).toEqual({
+      id: 'qwen3.5:4b',
+      name: 'qwen3.5:4b',
+      provider: 'macbook',
+      supportsTools: true,
+      thinking: 'switch',
+      maxPromptChars: promptBudget(32768),
+      sizeB: 4,
+      completion: false,
+      available: true,
+    });
+    expect(m('qwen3.5:2b')).toMatchObject({
+      supportsTools: false,
+      thinking: 'switch',
+      maxPromptChars: promptBudget(4096),
+    });
+    expect(m('qwen2.5-coder:1.5b-base')).toMatchObject({ thinking: 'none', completion: true, sizeB: 1.5 });
+    expect(m('gpt-oss:20b')).toMatchObject({ thinking: 'levels', supportsTools: true });
+    expect(m('nomic-embed-text:latest')).toBeUndefined(); // can't chat
+  });
+
+  it('offers a model Ollama won\'t describe for plain chat, and drops ":latest" from names', () => {
+    expect(modelFrom({ name: 'mystery:latest' }, undefined)).toMatchObject({
+      name: 'mystery',
+      supportsTools: false,
+      thinking: 'none',
+      maxPromptChars: promptBudget(DEFAULT_CONTEXT_TOKENS),
+      completion: false,
+    });
+  });
+
+  it("uses the model's num_ctx, else Ollama's 4K default, within what it was trained for", () => {
+    expect(contextTokens({ parameters: 'stop "<|im_end|>"\nnum_ctx 8192' })).toBe(8192);
+    expect(contextTokens({})).toBe(4096);
+    expect(contextTokens({ parameters: 'num_ctx 65536', model_info: { 'llama.context_length': 8192 } })).toBe(8192);
+    expect(promptBudget(32768)).toBeGreaterThan(64_000);
+    expect(promptBudget(4096)).toBeLessThan(6_000);
+  });
+
+  it('reads sizes and the tag list', () => {
+    expect([billions('4.0B'), billions('596.05M'), billions('1.5B'), billions(undefined)]).toEqual([
+      4, 0.59605, 1.5, 0,
     ]);
-    expect(modelsFromTags({ models: [{ model: 'oreo-2b' }] }).map((m) => m.available)).toEqual([false, true, false]);
+    expect(
+      tagsFrom({
+        models: [{ name: 'a:latest', digest: 'd1', details: { parameter_size: '4B' } }, { model: 'b' }, null],
+      }),
+    ).toEqual([
+      { name: 'a:latest', digest: 'd1', parameterSize: '4B' },
+      { name: 'b', digest: undefined, parameterSize: undefined },
+    ]);
+    expect(() => tagsFrom({ data: [] })).toThrow(/unexpected model list/);
   });
 
-  it('does not match other tags or prefixes', () => {
-    const models = modelsFromTags({ models: [{ name: 'oreo-4b:q8' }, { name: 'oreo-2b-old' }, null] });
-    expect(models.every((m) => !m.available)).toBe(true);
-  });
-
-  it('rejects other shapes', () => {
-    expect(() => modelsFromTags({ data: [] })).toThrow(/unexpected model list/);
+  it('picks the largest model with tools by default, and the smallest coder for completion', async () => {
+    const { fetchImpl } = fakeOllama(Object.keys(SHOW));
+    const models = await new OllamaClient(ollama, fetchImpl).listModels();
+    expect(defaultModel(models)?.id).toBe('gpt-oss:20b');
+    expect(defaultModel(models.filter((m) => m.id !== 'gpt-oss:20b'))?.id).toBe('qwen3.5:4b');
+    expect(defaultModel(models.filter((m) => !m.supportsTools))?.id).toBe('qwen3.5:2b');
+    expect(completionModel(models)?.id).toBe('qwen2.5-coder:1.5b-base');
+    expect(completionModel(models.filter((m) => !m.completion))).toBeUndefined();
   });
 });
 
 describe('OllamaClient', () => {
-  it('lists the Oreo models from /api/tags without any token', async () => {
-    let seen: Request | undefined;
+  it('lists the installed models largest first, asking /api/show about each, without any token', async () => {
+    const seen: Request[] = [];
+    const { fetchImpl, calls } = fakeOllama(['qwen2.5-coder:1.5b-base', 'qwen3.5:4b', 'nomic-embed-text:latest']);
     const client = new OllamaClient(ollama, async (input, init) => {
-      seen = new Request(input as string, init);
-      return jsonResponse(200, { models: [{ name: 'oreo-2b:latest', model: 'oreo-2b:latest' }] });
+      seen.push(new Request(input as string, init));
+      return fetchImpl(input, init);
     });
     const models = await client.listModels();
-    expect(models.map((m) => [m.id, m.available])).toEqual([
-      ['oreo-4b', false],
-      ['oreo-2b', true],
-      ['oreo-1.5b', false],
+    expect(models.map((m) => m.id)).toEqual(['qwen3.5:4b', 'qwen2.5-coder:1.5b-base']);
+    expect(calls).toEqual([
+      `${ollama}/api/tags`,
+      'show qwen2.5-coder:1.5b-base',
+      'show qwen3.5:4b',
+      'show nomic-embed-text:latest',
     ]);
-    expect(seen?.url).toBe(`${ollama}/api/tags`);
-    expect(seen?.headers.get('authorization')).toBeNull();
+    expect(seen.every((r) => r.headers.get('authorization') === null)).toBe(true);
   });
 
   it('raises OllamaHttpError with an Ollama { error } body', async () => {
@@ -94,14 +173,16 @@ describe('OllamaClient', () => {
   it('streams from /v1/chat/completions with the model and reasoning_effort in the body', async () => {
     let url = '';
     let body: { model?: string; stream?: boolean; reasoning_effort?: string; messages?: unknown } = {};
-    const client = new OllamaClient(ollama, async (input, init) => {
-      url = String(input);
+    const { fetchImpl } = fakeOllama(['qwen3.5:4b'], (u, init) => {
+      url = u;
       body = JSON.parse(String(init?.body));
       return sseResponse(['Hel', 'lo']);
     });
+    const client = new OllamaClient(ollama, fetchImpl);
+    await client.listModels();
     const parts: string[] = [];
     for await (const p of client.streamChat(
-      'oreo-4b',
+      'qwen3.5:4b',
       [{ role: 'user', content: 'hi' }],
       new AbortController().signal,
       'none',
@@ -111,7 +192,7 @@ describe('OllamaClient', () => {
     expect(parts.join('')).toBe('Hello');
     expect(url).toBe(`${ollama}/v1/chat/completions`);
     expect(body).toEqual({
-      model: 'oreo-4b',
+      model: 'qwen3.5:4b',
       messages: [{ role: 'user', content: 'hi' }],
       stream: true,
       reasoning_effort: 'none',
@@ -119,18 +200,20 @@ describe('OllamaClient', () => {
     });
   });
 
-  // Every level on the thinking Mac models goes out unchanged; Ollama turns any level
-  // but "none" into thinking on for qwen3.5.
+  // Every level goes out unchanged to a model that can think; Ollama turns any level but
+  // "none" into thinking on for a model that can only think or not.
   it.each(
-    OREO_MODELS.filter((m) => m.provider === 'macbook' && m.thinking !== 'none').flatMap((m) =>
-      (['none', 'low', 'medium', 'high'] as const).map((e) => [m.id, e] as const),
+    ['qwen3.5:4b', 'gpt-oss:20b'].flatMap((m) =>
+      (['none', 'low', 'medium', 'high'] as const).map((e) => [m, e] as const),
     ),
   )('sends %s the effort %s as reasoning_effort', async (model, effort) => {
     let body: { model?: string; reasoning_effort?: string; max_tokens?: number } = {};
-    const client = new OllamaClient(ollama, async (_input, init) => {
+    const { fetchImpl } = fakeOllama([model], (_u, init) => {
       body = JSON.parse(String(init?.body));
       return sseResponse(['ok']);
     });
+    const client = new OllamaClient(ollama, fetchImpl);
+    await client.listModels();
     for await (const _ of client.streamChat(
       model,
       [{ role: 'user', content: 'hi' }],
@@ -150,12 +233,14 @@ describe('OllamaClient', () => {
     'sends a model that cannot think no reasoning_effort, even for %s',
     async (effort) => {
       let body: { reasoning_effort?: string; max_tokens?: number } = {};
-      const client = new OllamaClient(ollama, async (_input, init) => {
+      const { fetchImpl } = fakeOllama(['qwen2.5-coder:1.5b-base'], (_u, init) => {
         body = JSON.parse(String(init?.body));
         return sseResponse(['ok']);
       });
+      const client = new OllamaClient(ollama, fetchImpl);
+      await client.listModels();
       for await (const _ of client.streamChat(
-        'oreo-1.5b',
+        'qwen2.5-coder:1.5b-base',
         [{ role: 'user', content: 'hi' }],
         new AbortController().signal,
         effort,
@@ -228,7 +313,7 @@ describe('describeOllamaError', () => {
     expect(describeOllamaError(refused, ollama)).toBe(`Can't reach Ollama at ${ollama}. Is it running?`);
   });
 
-  it('suggests creating or pulling a missing model', () => {
+  it('suggests pulling a missing model again or reloading', () => {
     const err = APIError.generate(
       404,
       { error: { message: 'model "oreo-4b" not found, try pulling it first' } },
@@ -236,10 +321,10 @@ describe('describeOllamaError', () => {
       new Headers(),
     );
     const text = describeOllamaError(err, ollama, 'oreo-4b');
-    expect(text).toMatch(/^oreo-4b isn't in Ollama\./);
-    expect(text).toContain('ollama create oreo-4b -f Modelfile.oreo-4b');
+    expect(text).toMatch(/^oreo-4b isn't in Ollama any more\./);
     expect(text).toContain('ollama pull oreo-4b');
-    expect(describeOllamaError(new OllamaHttpError(404), ollama)).toMatch(/ollama create/);
+    expect(text).toContain('reload the window');
+    expect(describeOllamaError(new OllamaHttpError(404), ollama)).toMatch(/Reload the window/);
   });
 
   it('passes on the message from OpenAI- and Ollama-shaped error bodies', () => {

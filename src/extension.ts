@@ -11,7 +11,6 @@ import { stdioConnect } from './mcp/stdioConnect';
 import { OllamaClient } from './ollama/client';
 import { tailscaleOllamaUrls } from './ollama/url';
 import { ghCliToken } from './auth/ghCliToken';
-import { CloudflareClient } from './cloudflare/client';
 import { describeError, downloadRelease, findUpdateWithTokens } from './update/releases';
 import type { ReasoningEffort, ViewState } from './shared/protocol';
 import { ChatViewProvider } from './views/chatViewProvider';
@@ -55,9 +54,6 @@ export function activate(context: vscode.ExtensionContext): void {
     getWorkspace: currentWorkspace,
     getWritableWorkspace: currentWorkspace,
     findSymbol: (name) => symbols.find(name),
-    // Workers AI through oreo-ai's relay on the Pi, over Tailscale; it holds the Cloudflare token.
-    getCloudUrl: () => config().get<string>('cloudUrl', ''),
-    createCloudClient: (cloudUrl) => new CloudflareClient(cloudUrl),
     post: (message) => view.post(message),
     onState: (state) => {
       latestState = state;
@@ -192,7 +188,7 @@ export function activate(context: vscode.ExtensionContext): void {
     // A new token or binary takes effect on the next start.
     githubTokens.onDidChange(() => void host.stop()),
     vscode.workspace.onDidChangeConfiguration((e) => {
-      if (e.affectsConfiguration('oreo.ollamaUrl') || e.affectsConfiguration('oreo.cloudUrl')) {
+      if (e.affectsConfiguration('oreo.ollamaUrl')) {
         void controller.refresh();
       }
       if (e.affectsConfiguration('oreo.githubMcp.path')) {

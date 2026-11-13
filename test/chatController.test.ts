@@ -12,8 +12,6 @@ import {
 import type { Workspace } from '../src/agent/workspaceTools';
 import type { FunctionTool, ModelClient, StreamEvent, WireMessage } from '../src/ollama/client';
 import { OllamaHttpError } from '../src/ollama/errors';
-import { cloudModels } from '../src/cloudflare/client';
-import { RelayHttpError } from '../src/cloudflare/errors';
 import type { ChatMessage, ModelInfo, ToWebview } from '../src/shared/protocol';
 
 const models: ModelInfo[] = [
@@ -24,7 +22,7 @@ const models: ModelInfo[] = [
     supportsTools: true,
     thinking: 'switch',
     maxPromptChars: 72_000,
-    defaultRank: 1,
+    sizeB: 4,
     available: true,
   },
   {
@@ -34,7 +32,7 @@ const models: ModelInfo[] = [
     supportsTools: false,
     thinking: 'switch',
     maxPromptChars: 72_000,
-    defaultRank: 2,
+    sizeB: 2,
     available: true,
   },
   {
@@ -44,7 +42,7 @@ const models: ModelInfo[] = [
     supportsTools: false,
     thinking: 'switch',
     maxPromptChars: 72_000,
-    defaultRank: 3,
+    sizeB: 9,
     available: false,
   },
 ];
@@ -182,15 +180,32 @@ describe('ChatController', () => {
     );
     await controller.refresh();
     expect(controller.state.selectedModel).toBe('oreo-2b');
-    // Largest first as in OREO_MODELS: the two Workers AI models (unusable without a
-    // token), then the Mac's; one not in OREO_MODELS goes last.
+    // Only what Ollama lists, as it lists them: no Cloudflare models.
     expect(controller.state.models.map((m) => [m.id, m.available])).toEqual([
-      ['@cf/openai/gpt-oss-120b', false],
-      ['@cf/qwen/qwen3-30b-a3b-fp8', false],
       ['oreo-4b', true],
       ['oreo-2b', true],
       ['oreo-9b', false],
     ]);
+    expect(controller.state.models.every((m) => m.provider === 'macbook')).toBe(true);
+  });
+
+  it('lists the models once and keeps them for the session: chats and New chat ask Ollama again for none', async () => {
+    let listed = 0;
+    const { controller } = setup(
+      fakeClient(
+        () => chunks('ok'),
+        async () => {
+          listed++;
+          return models;
+        },
+      ),
+    );
+    await controller.refresh();
+    await controller.handle({ type: 'send', text: 'hi' });
+    await controller.handle({ type: 'newChat' });
+    await controller.handle({ type: 'selectModel', modelId: 'oreo-2b' });
+    await controller.handle({ type: 'send', text: 'again' });
+    expect(listed).toBe(1);
   });
 
   it('says Ollama is unreachable in one sentence', async () => {
@@ -208,7 +223,7 @@ describe('ChatController', () => {
     expect(controller.state.error).toBe("Can't reach Ollama at http://127.0.0.1:11434. Is it running?");
   });
 
-  it('explains when Ollama has none of the Oreo models', async () => {
+  it('explains when Ollama has no model that can chat', async () => {
     const { controller } = setup(
       fakeClient(
         () => chunks(),
@@ -217,7 +232,7 @@ describe('ChatController', () => {
     );
     await controller.refresh();
     expect(controller.state.selectedModel).toBeUndefined();
-    expect(controller.state.error).toMatch(/none of the Oreo models/);
+    expect(controller.state.error).toMatch(/has no models that can chat\. Pull one with "ollama pull"/);
   });
 
   it('streams a reply and keeps the finished turn', async () => {
@@ -456,16 +471,16 @@ describe('pickModel', () => {
     expect(pickModel([], undefined, undefined)).toBeUndefined();
   });
 
-  it('never picks a model without a rank for you, but keeps one you chose', () => {
-    const coder: ModelInfo = { ...models[1], id: 'oreo-1.5b', name: 'Oreo 1.5B', thinking: 'none' };
-    delete coder.defaultRank;
-    const ranked = [{ ...models[0], available: false }, coder, { ...models[1], available: false }];
-    expect(pickModel(ranked, undefined, undefined)).toBeUndefined();
-    expect(pickModel(ranked, undefined, 'oreo-1.5b')).toBe('oreo-1.5b');
+  it("doesn't pick a completion model for you while another can chat, but keeps one you chose", () => {
+    const coder: ModelInfo = { ...models[1], id: 'coder', name: 'coder', sizeB: 7, thinking: 'none', completion: true };
+    const list = [{ ...models[0], available: false }, coder, models[1]];
+    expect(pickModel(list, undefined, undefined)).toBe('oreo-2b');
+    expect(pickModel(list, undefined, 'coder')).toBe('coder');
   });
 
-  it('picks by rank, not by where a model sits in the list', () => {
+  it('picks the largest model that can use tools, not by where it sits in the list', () => {
     expect(pickModel([models[1], models[0]], undefined, undefined)).toBe('oreo-4b');
+    expect(pickModel([models[1], { ...models[0], sizeB: 1 }], undefined, undefined)).toBe('oreo-4b');
   });
 
   it('skips models Ollama does not have', () => {
@@ -647,170 +662,5 @@ describe('empty replies, thinking and the context window', () => {
     ];
     expect(fitToContext(wire, 1)).toBe(1);
     expect(wire).toHaveLength(2);
-  });
-});
-
-describe('Cloudflare models', () => {
-  const RELAY = 'https://ai.animesh.org.in/v1';
-  const QWEN = '@cf/qwen/qwen3-30b-a3b-fp8';
-  const GPT = '@cf/openai/gpt-oss-120b';
-  const cloudList =
-    (...listed: string[]) =>
-    async (): Promise<ModelInfo[]> =>
-      cloudModels(new Set(listed));
-
-  function cloudClient(list: () => Promise<ModelInfo[]> = cloudList(QWEN, GPT)) {
-    const calls: string[] = [];
-    const client: ModelClient = {
-      listModels: list,
-      async *streamChat(model) {
-        calls.push(model);
-        yield { type: 'text', text: 'from the cloud' };
-      },
-    };
-    return { client, calls };
-  }
-
-  function relay(client: ModelClient, url = `${RELAY}/`) {
-    const urls: string[] = [];
-    return {
-      urls,
-      deps: {
-        getCloudUrl: () => url,
-        createCloudClient: (u: string) => {
-          urls.push(u);
-          return client;
-        },
-      } satisfies Partial<ChatControllerDeps>,
-    };
-  }
-
-  const refused = () => Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNREFUSED' } });
-
-  it("lists the models oreo-ai's relay offers as usable and sends to the cloud client", async () => {
-    const cloud = cloudClient();
-    const r = relay(cloud.client);
-    const { controller } = setup(
-      fakeClient(() => chunks('from the Mac')),
-      { ...r.deps, getLastModel: () => GPT },
-    );
-    await controller.refresh();
-    expect(r.urls).toEqual([RELAY]);
-    expect(controller.state.selectedModel).toBe(GPT);
-    await controller.handle({ type: 'send', text: 'hi' });
-    expect(cloud.calls).toEqual([GPT]);
-    expect(controller.state.messages.at(-1)?.content).toBe('from the cloud');
-  });
-
-  it('greys out a cloud model the relay leaves out', async () => {
-    const { controller } = setup(
-      fakeClient(() => chunks()),
-      relay(cloudClient(cloudList(GPT)).client).deps,
-    );
-    await controller.refresh();
-    const cloud = controller.state.models.filter((m) => m.provider === 'cloudflare');
-    expect(cloud.map((m) => [m.id, m.available])).toEqual([
-      [GPT, true],
-      [QWEN, false],
-    ]);
-  });
-
-  it.each([
-    ['unreachable', refused],
-    ['without Cloudflare (503)', () => new RelayHttpError(503, 'Cloudflare is not configured.')],
-  ])('keeps the Mac models working when the relay is %s', async (_name, failure) => {
-    const cloud = cloudClient(async () => {
-      throw failure();
-    });
-    const { controller } = setup(
-      fakeClient(() => chunks()),
-      relay(cloud.client).deps,
-    );
-    await controller.refresh();
-    expect(controller.state.error).toBeUndefined();
-    expect(controller.state.selectedModel).toBe('oreo-4b');
-    expect(controller.state.models.filter((m) => m.provider === 'cloudflare').map((m) => m.available)).toEqual([
-      false,
-      false,
-    ]);
-  });
-
-  it('offers no cloud model and calls no relay when oreo.cloudUrl is empty', async () => {
-    const r = relay(cloudClient().client, '  ');
-    const { controller } = setup(
-      fakeClient(() => chunks()),
-      r.deps,
-    );
-    await controller.refresh();
-    expect(r.urls).toEqual([]);
-    expect(controller.state.models.filter((m) => m.provider === 'cloudflare').every((m) => !m.available)).toBe(true);
-  });
-
-  it('greys out the cloud models for an invalid oreo.cloudUrl', async () => {
-    const r = relay(cloudClient().client, 'ftp://ai.animesh.org.in');
-    const { controller } = setup(
-      fakeClient(() => chunks()),
-      r.deps,
-    );
-    await controller.refresh();
-    expect(r.urls).toEqual([]);
-    expect(controller.state.error).toBeUndefined();
-    expect(controller.state.models.filter((m) => m.provider === 'cloudflare').every((m) => !m.available)).toBe(true);
-  });
-
-  it('still works through the relay when Ollama is down, with no error shown', async () => {
-    const cloud = cloudClient();
-    const { controller } = setup(
-      fakeClient(
-        () => chunks(),
-        async () => {
-          throw refused();
-        },
-      ),
-      relay(cloud.client).deps,
-    );
-    await controller.refresh();
-    expect(controller.state.error).toBeUndefined();
-    expect(controller.state.selectedModel).toBe(QWEN);
-    expect(controller.state.models.filter((m) => m.available).map((m) => m.provider)).toEqual([
-      'cloudflare',
-      'cloudflare',
-    ]);
-  });
-
-  it('shows the Ollama problem when neither Ollama nor the relay answers', async () => {
-    const { controller } = setup(
-      fakeClient(
-        () => chunks(),
-        async () => {
-          throw refused();
-        },
-      ),
-      relay(
-        cloudClient(async () => {
-          throw refused();
-        }).client,
-      ).deps,
-    );
-    await controller.refresh();
-    expect(controller.state.selectedModel).toBeUndefined();
-    expect(controller.state.error).toMatch(/Can't reach Ollama/);
-  });
-
-  it('words a relay failure as oreo-ai, not Ollama', async () => {
-    const client: ModelClient = {
-      listModels: cloudList(QWEN, GPT),
-      // eslint-disable-next-line require-yield
-      async *streamChat() {
-        throw refused();
-      },
-    };
-    const { controller } = setup(
-      fakeClient(() => chunks()),
-      { ...relay(client).deps, getLastModel: () => QWEN },
-    );
-    await controller.refresh();
-    await controller.handle({ type: 'send', text: 'hi' });
-    expect(controller.state.error).toBe(`Can't reach oreo-ai at ${RELAY}. Is the Mac on Tailscale?`);
   });
 });

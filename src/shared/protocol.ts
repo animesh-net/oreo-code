@@ -1,14 +1,14 @@
 // Messages between the extension host and the chat webview.
 // Shared by both bundles, so keep this file free of Node and DOM imports.
 
-/** Where a model runs: the MacBook's Ollama, or Cloudflare Workers AI. */
-export type ModelProvider = 'macbook' | 'cloudflare';
+/** Where a model runs: the Mac's Ollama, the only place models come from. */
+export type ModelProvider = 'macbook';
 
 /**
  * How a model can think. "switch": only on or off (Off / On in the menu); Ollama
  * turns any level into "on" for such a model. "levels": always reasons, at low,
  * medium or high. "none": can't think, so there is no Thinking menu and no
- * reasoning_effort is sent. Set per model in `src/ollama/models.ts`.
+ * reasoning_effort is sent. Read from what Ollama says of each model (`src/ollama/models.ts`).
  */
 export type ThinkingStyle = 'switch' | 'levels' | 'none';
 
@@ -20,9 +20,9 @@ export interface ModelInfo {
   thinking: ThinkingStyle;
   /** The prompt is kept under this many characters, to fit the model's context window. */
   maxPromptChars: number;
-  /** Lower is picked first when no model is chosen; without one, only picked by hand. */
-  defaultRank?: number;
-  /** The Mac model that writes inline code completions; one model has it. */
+  /** Size in billions of parameters, from Ollama; the menu lists the largest first. */
+  sizeB?: number;
+  /** Can write inline code completions (Qwen2.5-Coder-style fill-in-the-middle). */
   completion?: boolean;
   /** False when Ollama doesn't have the model installed. */
   available: boolean;
