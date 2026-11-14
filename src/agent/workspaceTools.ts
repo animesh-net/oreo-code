@@ -117,9 +117,10 @@ export async function runWorkspaceTool(ws: Workspace, call: ToolCall): Promise<T
       };
     }
     case 'read_file': {
-      const path = cleanPath(str('path'));
-      const known = await knownFile(ws, path);
-      if (typeof known === 'string') return { summary: `Couldn't read ${path || 'a file'}`, content: known };
+      const asked = cleanPath(str('path'));
+      const known = await knownFile(ws, asked);
+      if (typeof known !== 'object') return { summary: `Couldn't read ${asked || 'a file'}`, content: known };
+      const path = known.path;
       let text: string;
       try {
         text = await ws.readFile(path);
@@ -186,10 +187,18 @@ function cleanPath(path: string): string {
   return path.trim().replace(/\\/g, '/').replace(/^\.\//, '');
 }
 
-/** Only files in the listing can be read: no absolute paths, "..", or ignored and secret files. */
-async function knownFile(ws: Workspace, path: string): Promise<true | string> {
+/**
+ * Only files in the listing can be read: no absolute paths, "..", or ignored and secret files.
+ * The listed file a path names. Small models often give just the file name ("index.js"
+ * for "server/index.js"): when exactly one listed file ends with it, that one is meant.
+ */
+async function knownFile(ws: Workspace, path: string): Promise<{ path: string } | string> {
   if (!path) return 'Error: path is empty.';
   if (isSecretPath(path)) return `Error: ${path} may hold secrets and isn't read.`;
-  if (!(await ws.listFiles()).includes(path)) return `Error: ${path} isn't in the repository. Use list_files.`;
-  return true;
+  const listed = await ws.listFiles();
+  if (listed.includes(path)) return { path };
+  const ending = listed.filter((f) => f.endsWith(`/${path}`) && !isSecretPath(f));
+  if (ending.length === 1) return { path: ending[0] };
+  if (ending.length > 1) return `Error: ${path} isn't in the repository. Did you mean ${ending.join(' or ')}?`;
+  return `Error: ${path} isn't in the repository. Use list_files.`;
 }
