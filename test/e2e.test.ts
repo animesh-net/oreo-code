@@ -118,7 +118,8 @@ describe('agent mode end to end, on disk', () => {
     // After the first change the file still doesn't parse, and the result says so with the new numbering.
     const afterFirst = sent[3].at(-1)?.content ?? '';
     expect(afterFirst).toMatch(/Lines after this change moved by -4/);
-    expect(afterFirst).toMatch(/still has errors|Errors in server\/index\.js/);
+    // Still broken after the first edit: the parser says where, at once, whatever VS Code has listed.
+    expect(afterFirst).toMatch(/Syntax error in server\/index\.js at line \d+: Unexpected token[\s\S]*> \d+: /);
     expect(run.steps.map((s) => s.title)).toContain('Checked 1 changed file: no errors');
     expect(await fixture('broken-server').verify(ws)).toMatchObject({ passed: true });
   });
@@ -246,6 +247,30 @@ describe('agent mode end to end, on disk', () => {
     const unchanged = sent[4].at(-1)?.content ?? '';
     expect(unchanged).toMatch(/^Error: that is exactly what server\/index\.js already has, so nothing changed/);
     expect(unchanged).toContain(`> ${crashLine}: server.listen(PORT`);
+    expect(await fixture('broken-server').verify(ws)).toMatchObject({ passed: true });
+  }, 30_000);
+
+  it('catches a syntax error at once and before finishing even when VS Code reports nothing', async () => {
+    const ws = await workspace('broken-server');
+    ws.problems = async () => []; // VS Code still busy: its list says nothing about the edit
+    const strayBrace = FIXED_SERVER_JS.replace(/^createServer\(serve\)/m, '}\ncreateServer(serve)');
+    const { client, sent } = scripted([
+      [call('read_file', { path: 'server/index.js' })],
+      [call('write_file', { path: 'server/index.js', content: strayBrace })],
+      'Fixed the server.', // ignores the warning: the end check sends it back
+      [call('write_file', { path: 'server/index.js', content: FIXED_SERVER_JS })],
+      'Removed the stray brace.',
+    ]);
+    const run = await runTask({ ws, client, modelId: 'oreo-4b', task: fixture('broken-server').task });
+
+    expect(run.error).toBeUndefined();
+    const afterEdit = sent[2].at(-1)?.content ?? '';
+    expect(afterEdit).toMatch(
+      /Syntax error in server\/index\.js at line \d+: Unexpected token\. Fix it before going on\./,
+    );
+    expect(afterEdit).not.toMatch(/No errors reported/);
+    expect(sent[3].at(-1)?.content).toMatch(/Syntax error in server\/index\.js at line \d+/);
+    expect(run.steps.map((s) => s.title)).toContain('Syntax error left in server/index.js');
     expect(await fixture('broken-server').verify(ws)).toMatchObject({ passed: true });
   }, 30_000);
 
