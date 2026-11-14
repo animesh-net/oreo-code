@@ -195,7 +195,10 @@ commit, pull request) through the local `github-mcp-server` over stdio.
   code-based tool configs and editor task files). The card shows
   the whole change, never a cut one (`MAX_WRITE_CHARS` caps file size instead), and a
   command with hidden or control characters is refused. A rejection goes back to the model; Stop
-  counts as one. `writePathProblem` refuses absolute paths, `.`/`..`, `.git` at any depth
+  counts as one. Stop ends the turn at once (`untilStop` in `ChatController.send` races
+  every step that can't be cancelled, such as saving a file or a VS Code call, against
+  it); what the old turn reports afterwards is dropped, and the agent loop ends at its
+  next abort check. `writePathProblem` refuses absolute paths, `.`/`..`, `.git` at any depth
   and secret files, in any letter case; the workspace refuses writes through symbolic
   links or outside the folder's real path, checked before the card and again on write; an edit's `old_text` must match exactly once (read_file's `12: ` line numbers are
   stripped if the model copied them; if it still isn't found, a match ignoring whitespace
