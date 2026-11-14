@@ -235,7 +235,11 @@ commit, pull request) through the local `github-mcp-server` over stdio.
   `MAX_READ_CHARS`), and earlier copies of it in the conversation (read_file results, older
   edit results, whole-file arguments) are replaced with a note (`retireCopies`,
   `src/agent/fileViews.ts`); `replace_lines` and `write_file` on a file that changed since
-  the model last saw it (a command or you) change nothing and show the latest copy. Agent calls use `AGENT_TEMPERATURE`
+  the model last saw it (a command or you) change nothing and show the latest copy, unless
+  it is now empty. An empty (blank) file is written whole by any write tool: `create_file`,
+  `write_file`, or `edit_file`'s `new_text` whatever its `old_text`, as an edit of the whole
+  file with its approval, Undo and checks; an edit whose old text is the whole file
+  replaces it outright when applied. Agent calls use `AGENT_TEMPERATURE`
   (0.2) for steadier tool calls. The step limit is `MAX_AGENT_STEPS`, plus `STEPS_PER_FIX`
   for each failed check sent back; ending at it mid-way adds a note saying so. `run_command` refuses commands that only read or list
   files (`READS_FILES`), pointing to read_file, list_files and search.

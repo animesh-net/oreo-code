@@ -221,6 +221,23 @@ describe('agent mode end to end, on disk', () => {
     expect(await fixture('broken-server').verify(ws)).toMatchObject({ passed: true });
   }, 30_000);
 
+  it('writes the whole file when it finds it empty, after a command emptied it', async () => {
+    const ws = await workspace('broken-server');
+    const empty = `node -e "require('fs').writeFileSync('server/index.js','')"`;
+    const { client, sent } = scripted([
+      [call('read_file', { path: 'server/index.js' })],
+      [call('run_command', { command: empty })],
+      [call('create_file', { path: 'server/index.js', content: FIXED_SERVER_JS })],
+      'Wrote server/index.js again, complete.',
+    ]);
+    const run = await runTask({ ws, client, modelId: 'oreo-4b', task: fixture('broken-server').task });
+
+    expect(run.error).toBeUndefined();
+    expect(sent[3].at(-1)?.content).toMatch(/^Edited server\/index\.js\./);
+    expect(await readFile(path.join(ws.root, 'server/index.js'), 'utf8')).toBe(FIXED_SERVER_JS);
+    expect(await fixture('broken-server').verify(ws)).toMatchObject({ passed: true });
+  }, 30_000);
+
   it('shows the failing lines when the app crashes, and again when the model rewrites the file unchanged', async () => {
     const ws = await workspace('broken-server');
     // Parses, but crashes on start: the server is never defined.

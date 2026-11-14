@@ -267,6 +267,38 @@ describe('write tools', () => {
     expect(ws.files['Program.cs']).toBe('class A\r\n{\r\n    int x = 2;\r\n    int y = 3;\r\n}\r\n');
   });
 
+  it('writes an empty file whole, whichever write tool the model picks', async () => {
+    const apply = async (ws: ReturnType<typeof memoryWorkspace>, c: ToolCall) => {
+      const prepared = await prepareWrite(ws, c);
+      if (!('pending' in prepared)) throw new Error(`expected pending: ${JSON.stringify(prepared)}`);
+      const cp = new Checkpoint();
+      return {
+        result: await applyWrite(ws, prepared.pending, new AbortController().signal, (e) => cp.remember(e)),
+        cp,
+      };
+    };
+    const body = 'const a = 1;\nconsole.log(a);\n';
+    for (const c of [
+      call('write_file', { path: 'app.js', content: body }),
+      call('create_file', { path: 'app.js', content: body }),
+      call('edit_file', { path: 'app.js', old_text: '', new_text: body }),
+      call('edit_file', { path: 'app.js', old_text: 'const a = 0;', new_text: body }),
+    ]) {
+      for (const empty of ['', '\n']) {
+        const ws = memoryWorkspace({ 'app.js': empty });
+        const { result, cp } = await apply(ws, c);
+        expect(result, c.function.name).toBe('Edited app.js.');
+        expect(ws.files['app.js']).toBe(body);
+        expect(cp.files).toEqual(['app.js']); // Undo puts the empty file back
+      }
+    }
+    // A file with code in it is still refused by create_file.
+    const full = memoryWorkspace({ 'app.js': 'x();\n' });
+    expect(await prepareWrite(full, call('create_file', { path: 'app.js', content: body }))).toEqual({
+      error: 'Error: app.js already exists. Use edit_file to change it.',
+    });
+  });
+
   it("runs commands without VS Code's own environment", () => {
     const env = commandEnv({ PATH: '/usr/bin', HOME: '/Users/a', ELECTRON_RUN_AS_NODE: '1', VSCODE_PID: '42' });
     expect(env).toEqual({ PATH: '/usr/bin', HOME: '/Users/a', CI: '1', FORCE_COLOR: '0', NO_COLOR: '1' });
