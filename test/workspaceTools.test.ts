@@ -59,6 +59,17 @@ describe('workspace tools', () => {
     expect((await runWorkspaceTool(workspace(), call('read_file', { path: '.env' }))).content).toMatch(/secrets/);
   });
 
+  it('reads a file named without its folder when only one file has that name', async () => {
+    const r = await runWorkspaceTool(workspace(), call('read_file', { path: 'a.ts' }));
+    expect(r.summary).toBe('Read src/a.ts');
+    expect(r.content).toMatch(/^src\/a\.ts \(3 lines\)\n1: const x = 1;/);
+    const two = { ...files, 'lib/a.ts': 'x\n' };
+    const ws = { ...workspace(), listFiles: async () => Object.keys(two).sort() };
+    expect((await runWorkspaceTool(ws, call('read_file', { path: 'a.ts' }))).content).toBe(
+      "Error: a.ts isn't in the repository. Did you mean lib/a.ts or src/a.ts?",
+    );
+  });
+
   it('searches every file but secret ones, case-insensitively', async () => {
     const r = await runWorkspaceTool(workspace(), call('search', { query: 'HELLO' }));
     expect(r.content.split('\n')).toEqual([
