@@ -2,6 +2,7 @@ import type { FunctionTool, ModelClient, ToolCall, WireMessage } from '../ollama
 import type { AgentStep, ModelInfo, ReasoningEffort } from '../shared/protocol';
 import type { Checkpoint } from './checkpoint';
 import { failureSite, linesAround } from './failureSite';
+import { checksSyntax, syntaxProblem } from './syntax';
 import { latestCopyNote, numberedCopy, retireCopies } from './fileViews';
 import { describeProblems, newProblems, type Problem } from './instructions';
 import { needsApproval } from './policy';
@@ -416,6 +417,18 @@ async function verifyWork(
   hint: Hint,
 ): Promise<string | undefined> {
   const failures: string[] = [];
+  // Every changed file must still parse, whatever VS Code has reported so far.
+  const unparsed: string[] = [];
+  for (const path of deps.checkpoint.files) {
+    const broken = await syntaxNote(deps, path, hint);
+    if (broken) {
+      unparsed.push(path);
+      failures.push(broken);
+    }
+  }
+  if (unparsed.length) {
+    step({ title: `Syntax error left in ${unparsed.join(', ')}`, outcome: 'error' });
+  }
   if (deps.problems) {
     // Every error left in a file the task changed counts, not only new ones: a task that
     // changes a file should leave it working.
@@ -596,7 +609,11 @@ async function runWrite(
   }
   if (path && !result.startsWith('Error')) {
     progress.changes++;
-    if (deps.problems) {
+    // A syntax error found here is certain and immediate; VS Code's list can lag behind
+    // the edit and say "no errors" about a broken file, so then it's left out.
+    const broken = await syntaxNote(deps, path, hint);
+    if (broken) result += `\n${broken}`;
+    else if (deps.problems) {
       result += `\n${describeProblems(path, baseline.get(path) ?? [], await deps.problems(path, true))}`;
     }
     // The model goes on from this copy, never an earlier one.
@@ -686,6 +703,24 @@ async function staleView(deps: AgentDeps, call: ToolCall, seen: Map<string, stri
   return copy
     ? `Error: ${why}, so your line numbers or text may not match it. Nothing was changed. Here is its latest copy; make the change against it:\n${copy}`
     : `Error: ${why}. Nothing was changed. Read it with read_file, then make the change against what you read.`;
+}
+
+/**
+ * The file's syntax error, with its numbered lines, if it doesn't parse
+ * (`src/agent/syntax.ts`); "" if it does, or isn't a kind that's checked.
+ */
+async function syntaxNote(deps: AgentDeps, path: string, hint: Hint): Promise<string> {
+  if (!checksSyntax(path)) return '';
+  try {
+    if (!(await deps.workspace.exists(path))) return '';
+    const text = await deps.workspace.readFile(path);
+    const problem = syntaxProblem(path, text);
+    if (!problem) return '';
+    hint.site = { path, line: problem.line };
+    return `Syntax error in ${path} at line ${problem.line}: ${problem.message}. Fix it before going on.\n${linesAround(path, text, problem.line)}`;
+  } catch {
+    return '';
+  }
 }
 
 /** The latest failure's place in the repository's code, for a rewrite that then changes nothing. */

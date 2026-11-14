@@ -127,6 +127,7 @@ commit, pull request) through the local `github-mcp-server` over stdio.
 | `src/agent/checkpoint.ts`           | "Undo task": each changed file's text from before the task, in memory                                                      |
 | `src/agent/instructions.ts`         | The repository's instruction files for the agent, and the errors a change added                                            |
 | `src/agent/verify.ts`               | The project check and start command found from its files, run when the agent says it's done                                |
+| `src/agent/syntax.ts`               | The extension's own syntax check (JavaScript/JSX, inline HTML scripts, JSON) after each edit                               |
 | `src/agent/failureSite.ts`          | The failing line in the repository's code from a check's or run's output, shown numbered to the model                      |
 | `src/agent/smoke.ts`                | Starts the app for a few seconds to see it runs and answers `/`                                                            |
 | `src/agent/findSymbol.ts`           | Read-only `find_symbol` over the completion symbol index                                                                   |
@@ -234,7 +235,13 @@ commit, pull request) through the local `github-mcp-server` over stdio.
   and `.github/copilot-instructions.md` go in the agent's system prompt, and a folder's
   own `AGENTS.md`/`CLAUDE.md` with the first file read or changed there (`Instructions`,
   within `instructionBudget`). After each edit the result lists the VS Code errors it
-  added (`describeProblems`, against the file's errors before the task). When the model
+  added (`describeProblems`, against the file's errors before the task), unless the
+  extension's own parser (`syntaxProblem`, `src/agent/syntax.ts`: acorn with JSX for
+  `.js`/`.mjs`/`.cjs`/`.jsx`, each inline script of an `.html` page, `JSON.parse` for JSON
+  without comments; Flow and decorator files left to VS Code) finds a syntax error: then
+  the result names it with the numbered lines, since VS Code's list can lag an edit by
+  seconds and call a broken file clean. When the model says it's done, every changed file
+  must parse too. When the model
   says it's done and the task changed files, the changed files are checked again (every error left in them
   counts, not only new ones, since a repeated message can hide a new error) and the
   project check from `detectCheckCommand` runs (without one, or if you reject it, `syntaxCheckCommand` parses
