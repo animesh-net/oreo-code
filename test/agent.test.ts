@@ -677,6 +677,34 @@ describe('agent mode in the chat', () => {
     expect(ws.files['a.ts']).toBe('x');
   });
 
+  it('ends the turn on Stop even while a step hangs, and drops what it reports later', async () => {
+    const { ws, controller, posted } = await setup([
+      [call('read_file', { path: 'a.ts' })],
+      [call('edit_file', { path: 'a.ts', old_text: 'x', new_text: 'y' })],
+      'Changed.',
+      'Hi.',
+    ]);
+    let release: () => void = () => {};
+    const write = ws.writeFile.bind(ws);
+    ws.writeFile = (path, text) => new Promise<void>((done) => (release = () => void write(path, text).then(done)));
+    await controller.handle({ type: 'setAgentMode', on: true });
+    const task = controller.handle({ type: 'send', text: 'change x' });
+    for (let i = 0; i < 40 && controller.state.messages.length < 1; i++) await tick();
+    for (let i = 0; i < 40; i++) await tick(); // the edit is now stuck saving the file
+    expect(controller.state.busy).toBe(true);
+
+    await controller.handle({ type: 'stop' });
+    await task; // ends at once, though the write is still pending
+    expect(controller.state.busy).toBe(false);
+    expect(controller.state.messages.at(-1)?.steps?.map((s) => s.title)).toEqual(['Read a.ts']);
+
+    const stepsBefore = posted.filter((m) => m.type === 'step').length;
+    release(); // the stuck save finishes late: the old turn reports nothing more
+    for (let i = 0; i < 40; i++) await tick();
+    expect(posted.filter((m) => m.type === 'step').length).toBe(stepsBefore);
+    expect(controller.state.messages.at(-1)?.steps?.map((s) => s.title)).toEqual(['Read a.ts']);
+  });
+
   it('shows the command and folder on the card, and Stop rejects it', async () => {
     const { ws, controller } = await setup([[call('run_command', { command: 'rm -rf build' })], 'never']);
     await controller.handle({ type: 'setAgentMode', on: true });

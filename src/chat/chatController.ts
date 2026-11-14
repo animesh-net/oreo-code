@@ -458,6 +458,14 @@ export class ChatController {
     const abort = new AbortController();
     this.abort = abort;
     this.publish();
+    // Stop ends the turn at once, whatever it's waiting for: a step that can't be cancelled
+    // (saving a file, a VS Code call that hangs) would otherwise hold the turn open. What
+    // the old turn reports after that is dropped; the agent loop ends at its next check.
+    const stopped = new Promise<never>((_, reject) => {
+      abort.signal.addEventListener('abort', () => reject(new Error('Stopped')), { once: true });
+    });
+    stopped.catch(() => {});
+    const untilStop = <T>(work: Promise<T>): Promise<T> => Promise.race([work, stopped]);
 
     let reply = '';
     const activity: string[] = [];
@@ -473,16 +481,20 @@ export class ChatController {
     try {
       if (writable && info) {
         const compact = this.compactor(chat, turnStart, abort.signal);
-        const result = await this.runAgentTask(writable, { client, info }, history, abort.signal, compact, {
-          onText: (delta) => {
-            reply += delta;
-            this.deps.post({ type: 'delta', text: delta });
-          },
-          onStep: (step) => {
-            steps.push(step);
-            this.deps.post({ type: 'step', step });
-          },
-        });
+        const result = await untilStop(
+          this.runAgentTask(writable, { client, info }, history, abort.signal, compact, {
+            onText: (delta) => {
+              if (abort.signal.aborted) return;
+              reply += delta;
+              this.deps.post({ type: 'delta', text: delta });
+            },
+            onStep: (step) => {
+              if (abort.signal.aborted) return;
+              steps.push(step);
+              this.deps.post({ type: 'step', step });
+            },
+          }),
+        );
         reply = result.reply;
         finish();
         return;
@@ -490,7 +502,7 @@ export class ChatController {
       const workspace = this.deps.getWorkspace?.();
       const tools = info?.supportsTools && workspace ? WORKSPACE_TOOLS : undefined;
       const wire: WireMessage[] = [
-        { role: 'system', content: await buildSystemPrompt(workspace, !!tools) },
+        { role: 'system', content: await untilStop(buildSystemPrompt(workspace, !!tools)) },
         ...this.historyWire(history),
       ];
       const compact = this.compactor(chat, turnStart, abort.signal);
@@ -500,7 +512,9 @@ export class ChatController {
         let calls: ToolCall[] | undefined;
         const offered = tools && round < MAX_TOOL_ROUNDS ? tools : undefined;
         let thinking = false;
-        const compacted = await compact(wire, question, client, model, info?.maxPromptChars ?? MAX_PROMPT_CHARS);
+        const compacted = await untilStop(
+          compact(wire, question, client, model, info?.maxPromptChars ?? MAX_PROMPT_CHARS),
+        );
         if (compacted !== undefined) {
           question = compacted;
           activity.push(COMPACTED);
@@ -526,7 +540,7 @@ export class ChatController {
         if (!calls?.length || !workspace) break;
         wire.push({ role: 'assistant', content: text, tool_calls: calls });
         for (const call of calls) {
-          const result = await runWorkspaceTool(workspace, call);
+          const result = await untilStop(runWorkspaceTool(workspace, call));
           activity.push(result.summary);
           this.deps.post({ type: 'activity', text: result.summary });
           wire.push({ role: 'tool', tool_call_id: call.id, content: result.content });
