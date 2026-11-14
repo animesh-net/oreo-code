@@ -170,7 +170,6 @@ export async function prepareWrite(
       if (problem) return { error: problem };
       const oldText = str('old_text');
       const newText = str('new_text');
-      if (!oldText) return { error: 'Error: old_text is empty. Copy the exact text to replace from read_file.' };
       if (newText === undefined) return { error: 'Error: new_text is missing.' };
       if (!(await ws.exists(path))) return { error: `Error: ${path} doesn't exist. Use create_file for a new file.` };
       const blocked = await ws.writeProblem?.(path);
@@ -181,6 +180,9 @@ export async function prepareWrite(
       } catch (err) {
         return { error: `Error: ${(err as Error).message}` };
       }
+      // An empty file has nothing to match: what the model wrote is the whole file.
+      if (!text.trim()) return fillEmpty(path, text, newText);
+      if (!oldText) return { error: 'Error: old_text is empty. Copy the exact text to replace from read_file.' };
       const found = replaceOnce(text, oldText, newText, path);
       if ('error' in found) return found;
       if (found.text.length > MAX_WRITE_CHARS) return { error: tooLarge(path) };
@@ -230,7 +232,20 @@ export async function prepareWrite(
       if (problem) return { error: problem };
       const content = str('content') ?? '';
       if (content.length > MAX_WRITE_CHARS) return { error: tooLarge(path) };
-      if (await ws.exists(path)) return { error: `Error: ${path} already exists. Use edit_file to change it.` };
+      if (await ws.exists(path)) {
+        let text: string | undefined;
+        try {
+          text = await ws.readFile(path);
+        } catch {
+          text = undefined;
+        }
+        if (text === undefined || text.trim()) {
+          return { error: `Error: ${path} already exists. Use edit_file to change it.` };
+        }
+        const blocked = await ws.writeProblem?.(path);
+        if (blocked) return { error: `Error: ${blocked}` };
+        return fillEmpty(path, text, content); // empty: write it whole
+      }
       const blocked = await ws.writeProblem?.(path);
       if (blocked) return { error: `Error: ${blocked}` };
       return { pending: { kind: 'create_file', path, content, diff: makeDiff(path, undefined, content) } };
@@ -283,7 +298,12 @@ export async function applyWrite(
   switch (pending.kind) {
     case 'edit_file': {
       const text = await ws.readFile(pending.path);
-      const found = replaceOnce(text, pending.oldText, pending.newText, pending.path);
+      // A whole-file change (write_file, replace_lines, an empty file filled) replaces the
+      // text outright, so an empty file isn't searched for an empty string.
+      const found =
+        text === pending.oldText
+          ? { text: pending.newText }
+          : replaceOnce(text, pending.oldText, pending.newText, pending.path);
       if ('error' in found) return found.error;
       remember({ path: pending.path, before: text, after: found.text });
       await ws.writeFile(pending.path, found.text);
@@ -598,6 +618,14 @@ export function cleanPath(path: string): string {
  * Replaces oldText once. A file with Windows line endings (common in .NET repos) is
  * matched and written with \r\n, since models send plain \n.
  */
+/** An empty (or blank) file written whole: an edit of all of it, so Undo and the checks apply. */
+function fillEmpty(path: string, text: string, content: string): { pending: PendingWrite } | { error: string } {
+  if (!content.trim()) return { error: `Error: ${path} is empty; write its complete content.` };
+  if (content.length > MAX_WRITE_CHARS) return { error: tooLarge(path) };
+  const body = hasLineNumbers(content) ? stripLineNumbers(content) : content;
+  return { pending: { kind: 'edit_file', path, oldText: text, newText: body, diff: makeDiff(path, text, body) } };
+}
+
 function replaceOnce(
   text: string,
   oldText: string,
@@ -637,6 +665,7 @@ function replaceExactlyOnce(
   newText: string,
   path: string,
 ): { text: string } | { error: string } {
+  if (!oldText) return { error: 'Error: old_text is empty. Copy the exact text to replace from read_file.' };
   const first = text.indexOf(oldText);
   if (first < 0) {
     // Models often copy code with the spacing tidied ("return true } catch" for

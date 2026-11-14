@@ -697,7 +697,8 @@ async function staleView(deps: AgentDeps, call: ToolCall, seen: Map<string, stri
     return undefined; // Missing or unreadable: the tool itself says so.
   }
   const before = seen.get(path);
-  if (before === undefined || before === now) return undefined;
+  // An empty file loses nothing by being written whole, so there is nothing to show first.
+  if (before === undefined || before === now || !now.trim()) return undefined;
   seen.set(path, now);
   const why = `${path} changed since you last saw it`;
   const copy = numberedCopy(path, now);
