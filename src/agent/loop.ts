@@ -2,6 +2,7 @@ import type { FunctionTool, ModelClient, ToolCall, WireMessage } from '../ollama
 import type { AgentStep, ModelInfo, ReasoningEffort } from '../shared/protocol';
 import type { Checkpoint } from './checkpoint';
 import { failureSite, linesAround } from './failureSite';
+import { braceHint } from './braces';
 import { checksSyntax, syntaxProblem } from './syntax';
 import { latestCopyNote, numberedCopy, retireCopies } from './fileViews';
 import { describeProblems, newProblems, type Problem } from './instructions';
@@ -717,10 +718,20 @@ async function syntaxNote(deps: AgentDeps, path: string, hint: Hint): Promise<st
     const problem = syntaxProblem(path, text);
     if (!problem) return '';
     hint.site = { path, line: problem.line };
-    return `Syntax error in ${path} at line ${problem.line}: ${problem.message}. Fix it before going on.\n${linesAround(path, text, problem.line)}`;
+    return `Syntax error in ${path} at line ${problem.line}: ${problem.message}. Fix it before going on.\n${linesAround(path, text, problem.line)}${braceAdvice(path, text, problem.line)}`;
   } catch {
     return '';
   }
+}
+
+/**
+ * For a JavaScript file, which brace is wrong when the braces explain the error at
+ * `line` (`src/agent/braces.ts`), on its own line; else "".
+ */
+function braceAdvice(path: string, text: string, line: number): string {
+  if (!/\.(js|mjs|cjs|jsx)$/i.test(path)) return '';
+  const hint = braceHint(text, line);
+  return hint ? `\n${hint}` : '';
 }
 
 /** The latest failure's place in the repository's code, for a rewrite that then changes nothing. */
@@ -746,7 +757,8 @@ async function pointAt(deps: AgentDeps, output: string, hint: Hint): Promise<str
 /** The file's lines around `line` as it is now, or "" if it can't be read. */
 async function showSite(deps: AgentDeps, path: string, line: number): Promise<string> {
   try {
-    return `\n\n${linesAround(path, await deps.workspace.readFile(path), line)}`;
+    const text = await deps.workspace.readFile(path);
+    return `\n\n${linesAround(path, text, line)}${braceAdvice(path, text, line)}`;
   } catch {
     return '';
   }
