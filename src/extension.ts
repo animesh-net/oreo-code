@@ -38,8 +38,10 @@ export function activate(context: vscode.ExtensionContext): void {
   let symbols: SharedSymbols;
   const stateChanged = new vscode.EventEmitter<void>();
 
+  const output = vscode.window.createOutputChannel('Oreo Code');
   const controller = new ChatController({
     getOllamaUrl: () => config().get<string>('ollamaUrl', ''),
+    log: (line) => output.appendLine(line),
     getLastModel: () => context.globalState.get<string>(LAST_MODEL_KEY),
     rememberModel: (modelId) => void context.globalState.update(LAST_MODEL_KEY, modelId),
     getEffort: () => context.globalState.get<ReasoningEffort>(EFFORT_KEY),
@@ -67,7 +69,6 @@ export function activate(context: vscode.ExtensionContext): void {
   // GitHub tools: github-mcp-server runs on this Mac as a child process, with the
   // GitHub token from the Keychain. It starts on first use, not at activation.
   const githubTokens = new GithubTokenStore(context.secrets);
-  const output = vscode.window.createOutputChannel('Oreo Code');
   const version = (context.extension.packageJSON as { version?: string }).version ?? '0.0.0';
   const host = new McpHost(async () => {
     const token = await githubTokens.get();

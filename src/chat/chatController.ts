@@ -29,6 +29,8 @@ import {
 export interface ChatControllerDeps {
   /** Raw "oreo.ollamaUrl" setting. */
   getOllamaUrl(): string;
+  /** A line for the Oreo Code output channel: what discovery found, and what failed. */
+  log?(line: string): void;
   /** The model picked last time in the dropdown, if any. */
   getLastModel(): string | undefined;
   /** Remembers the dropdown choice for next time. */
@@ -121,6 +123,22 @@ export function fitToContext(wire: WireMessage[], question: number, max = MAX_PR
   return question;
 }
 
+/** Waits before each retry of a discovery that left a model undescribed. */
+export const REDISCOVERY_DELAYS_MS = [5_000, 15_000, 45_000, 120_000];
+
+/** One model for the log: what it can do and how much prompt it gets. */
+function describeModel(m: ModelInfo): string {
+  if (m.described === false) return `${m.id} (not described)`;
+  const can = [
+    m.supportsTools && 'tools',
+    m.thinking !== 'none' && `thinking (${m.thinking})`,
+    m.completion && 'completion',
+  ]
+    .filter(Boolean)
+    .join(', ');
+  return `${m.id} (${can || 'chat only'}, ${m.maxPromptChars} prompt chars)`;
+}
+
 /** Compacts a prompt that's nearly full; returns the question's new index, or undefined. */
 type Compactor = (
   wire: WireMessage[],
@@ -199,6 +217,8 @@ export class ChatController {
   private error: string | undefined;
   private abort: AbortController | undefined;
   private refreshSeq = 0;
+  /** A pending retry of a discovery that couldn't describe every model. */
+  private rediscovery: ReturnType<typeof setTimeout> | undefined;
   private agentMode: boolean;
   /** On unless you switch it off: edits apply without a card; commands and files that run code still ask. */
   private approveEdits: boolean;
@@ -242,6 +262,7 @@ export class ChatController {
   /** Re-reads the Ollama URL setting, then reloads the model list. */
   async refresh(): Promise<void> {
     const seq = ++this.refreshSeq;
+    clearTimeout(this.rediscovery);
     this.error = undefined;
     this.client = undefined;
     this.models = [];
@@ -273,6 +294,45 @@ export class ChatController {
     }
     if (seq !== this.refreshSeq) return;
     this.publish();
+    this.afterDiscovery(seq, 0);
+  }
+
+  /**
+   * Logs what discovery found and, if Ollama couldn't describe a model (its features
+   * would stay off all session), tries again after each of REDISCOVERY_DELAYS_MS. This
+   * finishes a failed discovery; a complete one is never redone while VS Code runs.
+   */
+  private afterDiscovery(seq: number, attempt: number): void {
+    const client = this.client;
+    if (!client || !this.models.length) return;
+    const undescribed = this.models.filter((m) => m.described === false);
+    const delay = REDISCOVERY_DELAYS_MS.at(attempt);
+    this.deps.log?.(
+      `Models at ${this.ollamaUrl}: ${this.models.map(describeModel).join('; ')}` +
+        undescribed
+          .map(
+            (m) =>
+              `\n  Couldn't read what ${m.id} can do (${client.showErrors?.get(m.id) ?? 'no answer'}): offered for plain chat${delay === undefined ? '; gave up' : `; trying again in ${delay / 1000} s`}.`,
+          )
+          .join(''),
+    );
+    if (!undescribed.length || delay === undefined) return;
+    this.rediscovery = setTimeout(() => {
+      void (async () => {
+        if (seq !== this.refreshSeq) return;
+        try {
+          const models = await client.listModels();
+          if (seq !== this.refreshSeq) return;
+          this.models = models;
+          this.selectedModel = pickModel(models, this.selectedModel, this.deps.getLastModel());
+          this.publish();
+        } catch (err) {
+          if (seq !== this.refreshSeq) return;
+          this.deps.log?.(`Listing the models again failed: ${(err as Error).message}`);
+        }
+        this.afterDiscovery(seq, attempt + 1);
+      })();
+    }, delay);
   }
 
   /** Looks for Ollama at the fallback addresses; uses the first that answers. */

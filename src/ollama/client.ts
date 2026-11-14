@@ -28,6 +28,8 @@ export type StreamEvent =
 /** What the chat controller needs from Ollama. */
 export interface ModelClient {
   listModels(signal?: AbortSignal): Promise<ModelInfo[]>;
+  /** Why /api/show failed for each model the last listModels couldn't describe. */
+  readonly showErrors?: ReadonlyMap<string, string>;
   streamChat(
     model: string,
     messages: WireMessage[],
@@ -43,6 +45,22 @@ type FetchLike = typeof fetch;
 
 export const FIRST_TOKEN_TIMEOUT_MS = 10 * 60_000;
 
+/** How often /api/show is asked about one model before it's offered for plain chat. */
+export const SHOW_ATTEMPTS = 3;
+/** The wait before the second ask; the third waits twice as long. */
+export const SHOW_RETRY_MS = 500;
+
+/** Waits, unless Stop or a new refresh aborts first. */
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    signal?.addEventListener('abort', () => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
+}
+
 /** Room for the answer; doubled when the model thinks first. */
 export const MAX_OUTPUT_TOKENS = 4096;
 
@@ -57,6 +75,7 @@ export class OllamaClient implements ModelClient {
   private readonly openai: OpenAI;
   /** Each listed model's thinking style, for what to send with a chat. */
   private readonly thinking = new Map<string, ModelInfo['thinking']>();
+  readonly showErrors = new Map<string, string>();
 
   constructor(
     private readonly ollamaUrl: string,
@@ -81,6 +100,7 @@ export class OllamaClient implements ModelClient {
     });
     if (!res.ok) throw new OllamaHttpError(res.status, await readMessage(res));
     const tags = tagsFrom(await res.json());
+    this.showErrors.clear();
     const models = await Promise.all(tags.map(async (tag) => modelFrom(tag, await this.show(tag.name, signal))));
     const usable = models.filter((m): m is ModelInfo => !!m);
     this.thinking.clear();
@@ -88,22 +108,37 @@ export class OllamaClient implements ModelClient {
     return inMenuOrder(usable);
   }
 
-  /** What Ollama says a model can do; undefined if it won't say, so it's offered for plain chat. */
+  /**
+   * What Ollama says a model can do, asked up to SHOW_ATTEMPTS times: a busy Ollama (say,
+   * loading a model as VS Code starts) can fail one request. Undefined if it never says,
+   * with the reason in `showErrors`; the model is then offered for plain chat.
+   */
   private async show(model: string, signal?: AbortSignal): Promise<ShowResponse | undefined> {
-    try {
-      const res = await this.fetchImpl(`${this.ollamaUrl}/api/show`, {
-        method: 'POST',
-        headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model }),
-        signal,
-      });
-      if (!res.ok) return undefined;
-      const body: unknown = await res.json();
-      return body && typeof body === 'object' ? (body as ShowResponse) : undefined;
-    } catch (err) {
-      if (signal?.aborted) throw err;
-      return undefined;
+    let reason = '';
+    for (let attempt = 0; attempt < SHOW_ATTEMPTS; attempt++) {
+      if (attempt) await sleep(SHOW_RETRY_MS * attempt, signal);
+      try {
+        const res = await this.fetchImpl(`${this.ollamaUrl}/api/show`, {
+          method: 'POST',
+          headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model }),
+          signal,
+        });
+        if (res.ok) {
+          const body: unknown = await res.json();
+          if (body && typeof body === 'object') return body as ShowResponse;
+          reason = "an answer that wasn't JSON";
+        } else {
+          const message = await readMessage(res).catch(() => '');
+          reason = message ? `HTTP ${res.status}: ${message}` : `HTTP ${res.status}`;
+        }
+      } catch (err) {
+        if (signal?.aborted) throw err;
+        reason = (err as Error).message;
+      }
     }
+    this.showErrors.set(model, reason);
+    return undefined;
   }
 
   async *streamChat(

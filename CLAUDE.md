@@ -165,7 +165,11 @@ commit, pull request) through the local `github-mcp-server` over stdio.
   The menu is largest first (`inMenuOrder`); with nothing chosen, `defaultModel` picks the
   largest with tools. No model id is written anywhere in the code. The list is read at
   activation, when `oreo.ollamaUrl` changes, and from the Retry button after a failure,
-  never while a session goes on. Every model's `provider` is `macbook`, so the webview's
+  never while a session goes on, with one exception: `/api/show` is asked up to
+  `SHOW_ATTEMPTS` times per model, and a discovery that still left a model undescribed
+  (`described: false`, offered for plain chat) is retried after each of
+  `REDISCOVERY_DELAYS_MS` until every model is described. Each discovery is logged to the
+  Oreo Code output channel: what each model can do, and why one couldn't be described. Every model's `provider` is `macbook`, so the webview's
   picker is unchanged.
 - **Completion stays on the Mac.** Inline completion uses only the smallest model with
   `completion: true` (`completionModel(models)`: `insert` capability and a `qwen2` family,
