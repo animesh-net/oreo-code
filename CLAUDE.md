@@ -128,6 +128,7 @@ commit, pull request) through the local `github-mcp-server` over stdio.
 | `src/agent/instructions.ts`         | The repository's instruction files for the agent, and the errors a change added                                            |
 | `src/agent/verify.ts`               | The project check and start command found from its files, run when the agent says it's done                                |
 | `src/agent/syntax.ts`               | The extension's own syntax check (JavaScript/JSX, inline HTML scripts, JSON) after each edit                               |
+| `src/agent/braces.ts`               | Matches a JavaScript file's braces and names the one to remove or add for a syntax error                                   |
 | `src/agent/failureSite.ts`          | The failing line in the repository's code from a check's or run's output, shown numbered to the model                      |
 | `src/agent/smoke.ts`                | Starts the app for a few seconds to see it runs and answers `/`                                                            |
 | `src/agent/findSymbol.ts`           | Read-only `find_symbol` over the completion symbol index                                                                   |
@@ -165,7 +166,11 @@ commit, pull request) through the local `github-mcp-server` over stdio.
   The menu is largest first (`inMenuOrder`); with nothing chosen, `defaultModel` picks the
   largest with tools. No model id is written anywhere in the code. The list is read at
   activation, when `oreo.ollamaUrl` changes, and from the Retry button after a failure,
-  never while a session goes on. Every model's `provider` is `macbook`, so the webview's
+  never while a session goes on, with one exception: `/api/show` is asked up to
+  `SHOW_ATTEMPTS` times per model, and a discovery that still left a model undescribed
+  (`described: false`, offered for plain chat) is retried after each of
+  `REDISCOVERY_DELAYS_MS` until every model is described. Each discovery is logged to the
+  Oreo Code output channel: what each model can do, and why one couldn't be described. Every model's `provider` is `macbook`, so the webview's
   picker is unchanged.
 - **Completion stays on the Mac.** Inline completion uses only the smallest model with
   `completion: true` (`completionModel(models)`: `insert` capability and a `qwen2` family,
@@ -240,7 +245,11 @@ commit, pull request) through the local `github-mcp-server` over stdio.
   `.js`/`.mjs`/`.cjs`/`.jsx`, each inline script of an `.html` page, `JSON.parse` for JSON
   without comments; Flow and decorator files left to VS Code) finds a syntax error: then
   the result names it with the numbered lines, since VS Code's list can lag an edit by
-  seconds and call a broken file clean. When the model says it's done, every changed file
+  seconds and call a broken file clean. For JavaScript, `braceHint` (`src/agent/braces.ts`)
+  matches every brace (skipping strings, template literals, comments and regular
+  expressions) and names the wrong one: the stray `}` that closed a `try` or `if` before
+  its `catch` or `else`, a `}` with nothing to close, or a block never closed; it rides
+  on syntax errors, on failure sites (`showSite`) and on an unchanged rewrite. When the model says it's done, every changed file
   must parse too. When the model
   says it's done and the task changed files, the changed files are checked again (every error left in them
   counts, not only new ones, since a repeated message can hide a new error) and the

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   ChatController,
   EMPTY_REPLY,
@@ -206,6 +206,61 @@ describe('ChatController', () => {
     await controller.handle({ type: 'selectModel', modelId: 'oreo-2b' });
     await controller.handle({ type: 'send', text: 'again' });
     expect(listed).toBe(1);
+  });
+
+  it('finishes a discovery that left a model undescribed, in the background, and logs it', async () => {
+    vi.useFakeTimers();
+    try {
+      const plain = models.map((m) => ({ ...m, supportsTools: false, thinking: 'none' as const, described: false }));
+      let listed = 0;
+      const log: string[] = [];
+      const client = fakeClient(
+        () => chunks('ok'),
+        async () => (++listed === 1 ? plain : models),
+      );
+      Object.assign(client, { showErrors: new Map([['oreo-4b', 'fetch failed']]) });
+      const { controller } = setup(client, { log: (line: string) => log.push(line) });
+      await controller.refresh();
+      expect(controller.state.models.find((m) => m.id === 'oreo-4b')?.supportsTools).toBe(false);
+      expect(log[0]).toMatch(
+        /Couldn't read what oreo-4b can do \(fetch failed\): offered for plain chat; trying again in 5 s\./,
+      );
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(listed).toBe(2);
+      expect(controller.state.models.find((m) => m.id === 'oreo-4b')).toMatchObject({ supportsTools: true });
+      expect(log[1]).toMatch(/^Models at .*: oreo-4b \(tools, thinking \(switch\), \d+ prompt chars\)/);
+      expect(log[1]).not.toMatch(/Couldn't read/);
+      await vi.advanceTimersByTimeAsync(300_000);
+      expect(listed).toBe(2); // complete now: never listed again
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('gives up retrying after the last delay', async () => {
+    vi.useFakeTimers();
+    try {
+      let listed = 0;
+      const log: string[] = [];
+      const plain = models.map((m) => ({ ...m, described: false }));
+      const { controller } = setup(
+        fakeClient(
+          () => chunks('ok'),
+          async () => {
+            listed++;
+            return plain;
+          },
+        ),
+        { log: (line: string) => log.push(line) },
+      );
+      await controller.refresh();
+      await vi.advanceTimersByTimeAsync(600_000);
+      expect(listed).toBe(5); // the first listing and four retries
+      expect(log.at(-1)).toMatch(/gave up\./);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('says Ollama is unreachable in one sentence', async () => {

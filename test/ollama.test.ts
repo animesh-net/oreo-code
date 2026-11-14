@@ -85,6 +85,7 @@ describe('models from Ollama', () => {
       maxPromptChars: promptBudget(32768),
       sizeB: 4,
       completion: false,
+      described: true,
       available: true,
     });
     expect(m('qwen3.5:2b')).toMatchObject({
@@ -104,6 +105,7 @@ describe('models from Ollama', () => {
       thinking: 'none',
       maxPromptChars: promptBudget(DEFAULT_CONTEXT_TOKENS),
       completion: false,
+      described: false,
     });
   });
 
@@ -215,6 +217,35 @@ describe('OllamaClient', () => {
       'show nomic-embed-text:latest',
     ]);
     expect(seen.every((r) => r.headers.get('authorization') === null)).toBe(true);
+  });
+
+  it('asks /api/show again when Ollama fails a request, as it can while starting up', async () => {
+    let shows = 0;
+    const { fetchImpl } = fakeOllama(['qwen3.5:4b']);
+    const flaky = (async (input: string | URL | Request, init?: RequestInit) => {
+      if (String(input).endsWith('/api/show') && ++shows < 3) {
+        if (shows === 1) throw new TypeError('fetch failed');
+        return jsonResponse(503, { error: 'busy loading a model' });
+      }
+      return fetchImpl(input, init);
+    }) as typeof fetch;
+    const client = new OllamaClient(ollama, flaky);
+    const [model] = await client.listModels();
+    expect(shows).toBe(3);
+    expect(model).toMatchObject({ id: 'qwen3.5:4b', described: true, supportsTools: true, thinking: 'switch' });
+    expect(client.showErrors.size).toBe(0);
+  });
+
+  it('offers a model Ollama never describes for plain chat, and says why', async () => {
+    const { fetchImpl } = fakeOllama(['qwen3.5:4b']);
+    const down = (async (input: string | URL | Request, init?: RequestInit) =>
+      String(input).endsWith('/api/show')
+        ? jsonResponse(500, { error: 'out of memory' })
+        : fetchImpl(input, init)) as typeof fetch;
+    const client = new OllamaClient(ollama, down);
+    const [model] = await client.listModels();
+    expect(model).toMatchObject({ described: false, supportsTools: false, thinking: 'none' });
+    expect(client.showErrors.get('qwen3.5:4b')).toBe('HTTP 500: out of memory');
   });
 
   it('raises OllamaHttpError with an Ollama { error } body', async () => {

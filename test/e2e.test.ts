@@ -274,6 +274,31 @@ describe('agent mode end to end, on disk', () => {
     expect(await fixture('broken-server').verify(ws)).toMatchObject({ passed: true });
   }, 30_000);
 
+  it('names the stray brace that closed the try, so the model removes it', async () => {
+    const ws = await workspace('broken-server');
+    // What Oreo 4B left in use: an extra `}` closes the try before its catch.
+    const strayClose = FIXED_SERVER_JS.replace(
+      '        response.end(content);\n',
+      '        response.end(content);\n        }\n',
+    );
+    const strayLine = strayClose.split('\n').indexOf('        }') + 1;
+    const { client, sent } = scripted([
+      [call('read_file', { path: 'server/index.js' })],
+      [call('write_file', { path: 'server/index.js', content: strayClose })],
+      [call('write_file', { path: 'server/index.js', content: strayClose })], // the same again
+      [call('replace_lines', { path: 'server/index.js', start_line: strayLine, end_line: strayLine, new_text: '' })],
+      'Removed the extra brace.',
+    ]);
+    const run = await runTask({ ws, client, modelId: 'oreo-4b', task: fixture('broken-server').task });
+
+    expect(run.error).toBeUndefined();
+    const fix = `Remove that extra \`}\` on line ${strayLine}.`;
+    expect(sent[2].at(-1)?.content).toContain(fix); // right after the edit that broke it
+    expect(sent[3].at(-1)?.content).toMatch(/^Error: that is exactly what server\/index\.js already has/);
+    expect(sent[3].at(-1)?.content).toContain(fix); // and again on the unchanged rewrite
+    expect(await fixture('broken-server').verify(ws)).toMatchObject({ passed: true });
+  }, 30_000);
+
   it("doesn't let a fix that leaves the file broken end the task", async () => {
     const ws = await workspace('broken-server');
     const { client, sent } = scripted([

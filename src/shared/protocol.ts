@@ -24,6 +24,8 @@ export interface ModelInfo {
   sizeB?: number;
   /** Can write inline code completions (Qwen2.5-Coder-style fill-in-the-middle). */
   completion?: boolean;
+  /** False when Ollama didn't say what the model can do: it's offered for plain chat until it does. */
+  described?: boolean;
   /** False when Ollama doesn't have the model installed. */
   available: boolean;
 }

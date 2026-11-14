@@ -119,6 +119,7 @@ export function modelFrom(tag: TagEntry, show: ShowResponse | undefined): ModelI
     sizeB: billions(size),
     // The inline completion prompt is Qwen2.5-Coder's fill-in-the-middle format.
     completion: (caps?.includes('insert') ?? false) && /^qwen2/i.test(family),
+    described: !!show,
     available: true,
   };
 }
